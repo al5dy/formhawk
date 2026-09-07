@@ -38,6 +38,8 @@ final class ContactForm7 implements FormIntegrationInterface {
 			ProviderCatalog::CAP_MAIL_FAILURE,
 			ProviderCatalog::CAP_STABLE_FIELD_IDS,
 			ProviderCatalog::CAP_DYNAMIC_RENDERING,
+			ProviderCatalog::CAP_SUBMISSION_ATTRIBUTION,
+			ProviderCatalog::CAP_FIELD_ROI,
 		);
 	}
 
@@ -59,7 +61,10 @@ final class ContactForm7 implements FormIntegrationInterface {
 			$metadata['id'],
 			$metadata['title'],
 			$this->submission_path(),
-			array( 'mail_success' => true )
+			array(
+				'mail_success' => true,
+				'fields'       => $this->structural_fields( $contact_form ),
+			)
 		);
 	}
 
@@ -108,7 +113,16 @@ final class ContactForm7 implements FormIntegrationInterface {
 
 		if ( 'mail_sent' === $status ) {
 			$this->terminal_recorded[ $metadata['id'] ] = true;
-			$this->events->record_success( $this->id(), $metadata['id'], $metadata['title'], $path, array( 'mail_success' => true ) );
+			$this->events->record_success(
+				$this->id(),
+				$metadata['id'],
+				$metadata['title'],
+				$path,
+				array(
+					'mail_success' => true,
+					'fields'       => $this->structural_fields( $contact_form ),
+				)
+			);
 		} elseif ( 'mail_failed' === $status ) {
 			$this->terminal_recorded[ $metadata['id'] ] = true;
 			$this->events->record_mail_failure( $this->id(), $metadata['id'], $metadata['title'], $path );
@@ -131,6 +145,29 @@ final class ContactForm7 implements FormIntegrationInterface {
 
 	private function terminal_was_recorded( $form_id ) {
 		return ! empty( $this->terminal_recorded[ $form_id ] );
+	}
+
+	private function structural_fields( $contact_form ) {
+		if ( ! is_object( $contact_form ) || ! is_callable( array( $contact_form, 'scan_form_tags' ) ) ) {
+			return array(); }
+		$fields = array();
+		foreach ( array_slice( (array) $contact_form->scan_form_tags(), 0, 50 ) as $tag ) {
+			if ( ! is_object( $tag ) ) {
+				continue; }
+			$public = get_object_vars( $tag );
+			$key    = Sanitizer::identifier( isset( $public['name'] ) ? $public['name'] : '', '' );
+			$type   = Sanitizer::field_type( isset( $public['basetype'] ) ? $public['basetype'] : '' );
+			if ( '' === $key || in_array( $type, array( 'submit', 'acceptance', 'quiz', 'captcha', 'recaptcha', 'file', 'hidden' ), true ) ) {
+				continue; }
+			$fields[] = array(
+				'key'      => $key,
+				'label'    => $key,
+				'type'     => $type,
+				'required' => is_callable( array( $tag, 'is_required' ) ) && $tag->is_required(),
+				'position' => count( $fields ),
+			);
+		}
+		return $fields;
 	}
 
 	private function submission_path() {

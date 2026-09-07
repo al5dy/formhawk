@@ -8,15 +8,17 @@ final class ProviderCatalog {
 	const WPFORMS   = 'wpforms';
 	const ELEMENTOR = 'elementor';
 
-	const CAP_FRONTEND_TRACKING = 'frontend_tracking';
-	const CAP_SERVER_SUCCESS    = 'server_success';
-	const CAP_SERVER_FAILURE    = 'server_failure';
-	const CAP_SERVER_VALIDATION = 'server_validation';
-	const CAP_MAIL_SUCCESS      = 'mail_success';
-	const CAP_MAIL_FAILURE      = 'mail_failure';
-	const CAP_MULTI_STEP        = 'multi_step';
-	const CAP_STABLE_FIELD_IDS  = 'stable_field_ids';
-	const CAP_DYNAMIC_RENDERING = 'dynamic_rendering';
+	const CAP_FRONTEND_TRACKING      = 'frontend_tracking';
+	const CAP_SERVER_SUCCESS         = 'server_success';
+	const CAP_SERVER_FAILURE         = 'server_failure';
+	const CAP_SERVER_VALIDATION      = 'server_validation';
+	const CAP_MAIL_SUCCESS           = 'mail_success';
+	const CAP_MAIL_FAILURE           = 'mail_failure';
+	const CAP_MULTI_STEP             = 'multi_step';
+	const CAP_STABLE_FIELD_IDS       = 'stable_field_ids';
+	const CAP_DYNAMIC_RENDERING      = 'dynamic_rendering';
+	const CAP_SUBMISSION_ATTRIBUTION = 'submission_attribution';
+	const CAP_FIELD_ROI              = 'field_roi';
 
 	public static function ids() {
 		return array( self::GENERIC, self::CF7, self::WPFORMS, self::ELEMENTOR );

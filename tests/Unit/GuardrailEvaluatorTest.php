@@ -26,6 +26,26 @@ final class GuardrailEvaluatorTest extends TestCase {
 		$this->assertSame( 'confirmed_conversion_harm', $result['reason'] );
 	}
 
+	public function test_business_value_objective_does_not_treat_lower_raw_conversion_as_terminal_harm() {
+		$policy                             = ( new OptimizationPolicy() )->for_form( array( 'aggressiveness' => 'balanced' ) );
+		$policy['business_value_objective'] = true;
+		$result                             = ( new GuardrailEvaluator() )->evaluate(
+			array(
+				'views'               => 2000,
+				'conversions'         => 240,
+				'confirmed_successes' => 240,
+			),
+			array(
+				'views'               => 2000,
+				'conversions'         => 160,
+				'confirmed_successes' => 160,
+			),
+			$policy
+		);
+		$this->assertFalse( $result['triggered'] );
+		$this->assertSame( 'within_limits', $result['reason'] );
+	}
+
 	public function test_provider_failure_and_js_error_guardrails_are_separate() {
 		$policy  = ( new OptimizationPolicy() )->for_form( array() );
 		$control = array(

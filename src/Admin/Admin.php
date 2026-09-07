@@ -17,7 +17,10 @@ use Formhawk\Domain\ProviderCatalog;
 use Formhawk\Infrastructure\IngestionDiagnostics;
 use Formhawk\Infrastructure\Activator;
 use Formhawk\Infrastructure\Database;
+use Formhawk\Infrastructure\ModuleGate;
 use Formhawk\Integrations\IntegrationRegistry;
+use Formhawk\Outcomes\Currency;
+use Formhawk\ROI\FieldROIRepository;
 
 final class Admin {
 	private $forms;
@@ -272,7 +275,7 @@ final class Admin {
 
 	private function autopilot_input() {
 		$input = array();
-		foreach ( array( 'mode', 'aggressiveness', 'currency' ) as $key ) {
+		foreach ( array( 'mode', 'aggressiveness', 'currency', 'optimization_objective' ) as $key ) {
 			// phpcs:ignore WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- The caller verifies the action nonce; values are type-checked here and allowlisted in the repository.
 			$value         = isset( $_POST[ $key ] ) ? wp_unslash( $_POST[ $key ] ) : '';
 			$input[ $key ] = is_scalar( $value ) ? sanitize_text_field( (string) $value ) : '';
@@ -456,6 +459,7 @@ final class Admin {
 
 			<p class="fh-note"><?php esc_html_e( 'Conversion is an aggregate ratio, not a linked visitor funnel. N/A means unavailable evidence, no denominator, or more outcomes than recorded starts. Browser validation friction is shown as reports, not a failure rate: native validation can block submission before a submit event exists.', 'formhawk' ); ?></p>
 			<p class="fh-note"><?php esc_html_e( 'Validation rejection share = provider validation rejections / (provider validation rejections + accepted submissions), measured since the evidence upgrade. Other provider failures and unknown outcomes are excluded.', 'formhawk' ); ?></p>
+			<?php $this->render_business_value_intelligence( $form ); ?>
 			<?php $this->render_autopilot( $form, $current, $fields ); ?>
 			<details><summary><?php esc_html_e( 'Historical counters (legacy evidence)', 'formhawk' ); ?></summary>
 				<p><?php esc_html_e( 'These frozen counters predate evidence separation and are excluded from current conversion and validation calculations.', 'formhawk' ); ?></p>
@@ -544,6 +548,58 @@ final class Admin {
 		<?php
 	}
 
+	private function render_business_value_intelligence( array $form ) {
+		if ( ! Database::field_roi_schema_is_current() || ! ( new ModuleGate() )->enabled( 'field_roi' ) ) {
+			return;
+		}
+		$repository  = new FieldROIRepository();
+		$settings    = get_option( 'formhawk_field_roi_settings', array() );
+		$settings    = is_array( $settings ) ? $settings : array();
+		$currency    = isset( $settings['currency'] ) ? strtoupper( $settings['currency'] ) : 'USD';
+		$end         = current_time( 'Y-m-d' );
+		$start       = wp_date( 'Y-m-d', time() - 89 * DAY_IN_SECONDS, wp_timezone() );
+		$summary     = $repository->form_summary( $form['id'], $start, $end, $currency );
+		$rows        = array_values(
+			array_filter(
+				$repository->results( 200 ),
+				static function ( $row ) use ( $form ) {
+					return absint( $row['form_id'] ) === absint( $form['id'] );
+				}
+			)
+		);
+		$money_maker = null;
+		$killer      = null;
+		foreach ( $rows as $row ) {
+			if ( ! $money_maker && in_array( $row['verdict'], array( 'money_maker', 'qualifier', 'free_value' ), true ) ) {
+				$money_maker = $row;
+			}
+			if ( ! $killer && 'conversion_killer' === $row['verdict'] ) {
+				$killer = $row;
+			}
+		}
+		$views              = absint( $summary['views'] );
+		$actual_revenue     = absint( $summary['revenue_samples'] ) > 0;
+		$value_per_visitor  = $actual_revenue && $views ? (int) round( (int) $summary['revenue_minor'] / $views ) : null;
+		$raw_conversion     = $views ? 100 * absint( $summary['submissions'] ) / $views : null;
+		$qualified_per_view = $views ? 100 * absint( $summary['qualified'] ) / $views : null;
+		$link               = admin_url( 'admin.php?page=formhawk-field-roi' );
+		?>
+		<section class="fh-card fh-business-value">
+			<div class="fh-card-head"><div><span class="fh-business-kicker"><?php esc_html_e( 'BUSINESS VALUE INTELLIGENCE', 'formhawk' ); ?></span><h2><?php esc_html_e( 'Field ROI', 'formhawk' ); ?></h2></div><a class="button" href="<?php echo esc_url( $link ); ?>"><?php esc_html_e( 'Open Field Value Map', 'formhawk' ); ?></a></div>
+			<?php if ( empty( $settings['enabled'] ) ) : ?>
+				<p><?php esc_html_e( 'Connect business outcomes to learn which fields protect value and which only create friction.', 'formhawk' ); ?></p>
+			<?php else : ?>
+				<div class="fh-business-metrics"><div><span><?php esc_html_e( 'Form value / visitor', 'formhawk' ); ?></span><strong><?php echo esc_html( null === $value_per_visitor ? '—' : $this->roi_money( $value_per_visitor, $currency ) ); ?></strong></div><div><span><?php esc_html_e( 'Raw conversion', 'formhawk' ); ?></span><strong><?php echo esc_html( null === $raw_conversion ? '—' : number_format_i18n( $raw_conversion, 1 ) . '%' ); ?></strong></div><div><span><?php esc_html_e( 'Qualified / visitor', 'formhawk' ); ?></span><strong><?php echo esc_html( null === $qualified_per_view ? '—' : number_format_i18n( $qualified_per_view, 1 ) . '%' ); ?></strong></div><div><span><?php esc_html_e( 'Actual revenue', 'formhawk' ); ?></span><strong><?php echo esc_html( $actual_revenue ? $this->roi_money( (int) $summary['revenue_minor'], $currency ) : '—' ); ?></strong></div></div>
+				<div class="fh-business-findings"><div><span><?php esc_html_e( 'TOP VALUE FIELD', 'formhawk' ); ?></span><strong><?php echo esc_html( $money_maker ? ( $money_maker['label'] ? $money_maker['label'] : $money_maker['normalized_key'] ) : __( 'Collecting evidence', 'formhawk' ) ); ?></strong><small><?php echo esc_html( $money_maker ? strtoupper( str_replace( '_', ' ', $money_maker['verdict'] ) ) : __( 'No eligible verdict yet', 'formhawk' ) ); ?></small></div><div><span><?php esc_html_e( 'TOP CONVERSION KILLER', 'formhawk' ); ?></span><strong><?php echo esc_html( $killer ? ( $killer['label'] ? $killer['label'] : $killer['normalized_key'] ) : __( 'None detected', 'formhawk' ) ); ?></strong><small><?php echo esc_html( $killer ? __( 'Test making it optional', 'formhawk' ) : __( 'Controlled evidence required', 'formhawk' ) ); ?></small></div></div>
+			<?php endif; ?>
+		</section>
+		<?php
+	}
+
+	private function roi_money( $minor, $currency ) {
+		return $currency . ' ' . number_format_i18n( Currency::major( $minor, $currency ), Currency::exponent( $currency ) );
+	}
+
 	private function render_diagnostics() {
 		$mail   = get_option( 'formhawk_mail_health', array() );
 		$cro    = $this->experiments->diagnostics();
@@ -585,8 +641,8 @@ final class Admin {
 		if ( count( $variants ) === 2 ) {
 			$control  = $totals[ $variants[0]['id'] ] ?? array();
 			$variant  = $totals[ $variants[1]['id'] ] ?? array();
-			$metric   = 'confirmed_conversion' === $experiment['primary_metric'] ? 'confirmed_successes' : 'observed_submits';
-			$analysis = ( new WinnerSelector() )->select(
+			$metric   = 'observed_submit_rate' === $experiment['primary_metric'] ? 'observed_submits' : 'confirmed_successes';
+			$analysis = in_array( $experiment['primary_metric'], array( 'business_value', 'qualified_leads', 'won_leads' ), true ) ? null : ( new WinnerSelector() )->select(
 				array(
 					'views'       => $control['views'] ?? 0,
 					'conversions' => $control[ $metric ] ?? 0,
@@ -650,7 +706,7 @@ final class Admin {
 					?>
 					<div><strong><?php echo esc_html( $settings['currency'] . ' ' . number_format_i18n( $estimated_value, 2 ) ); ?></strong><span><?php esc_html_e( 'Estimated additional value', 'formhawk' ); ?></span></div><?php endif; ?></div>
 				<?php if ( $experiment ) : ?>
-					<div class="fh-cro-current"><span class="fh-eyebrow"><?php esc_html_e( 'CURRENT EXPERIMENT', 'formhawk' ); ?></span><h3><?php echo esc_html( $experiment['hypothesis'] ); ?></h3><p><?php echo esc_html( 'confirmed_conversion' === $experiment['primary_metric'] ? __( 'Primary metric: provider-confirmed conversion.', 'formhawk' ) : __( 'Primary metric: observed submit rate; confirmed conversion is not available for generic HTML.', 'formhawk' ) ); ?></p>
+					<div class="fh-cro-current"><span class="fh-eyebrow"><?php esc_html_e( 'CURRENT EXPERIMENT', 'formhawk' ); ?></span><h3><?php echo esc_html( $experiment['hypothesis'] ); ?></h3><p><?php echo esc_html( $this->primary_metric_label( $experiment['primary_metric'] ) ); ?></p>
 					<?php if ( $analysis && count( $variants ) === 2 ) : ?>
 						<div class="fh-cro-compare"><div><span><?php esc_html_e( 'Control', 'formhawk' ); ?></span><strong><?php echo esc_html( number_format_i18n( 100 * $analysis['control_rate'], 1 ) . '%' ); ?></strong><small><?php echo esc_html( sprintf( /* translators: 1: views, 2: conversions, 3: traffic percentage. */ __( '%1$d views · %2$d conversions · %3$d%% traffic', 'formhawk' ), absint( $totals[ $variants[0]['id'] ]['views'] ?? 0 ), absint( $totals[ $variants[0]['id'] ][ $metric ] ?? 0 ), absint( $variants[0]['traffic_weight'] ) ) ); ?></small></div><div><span><?php esc_html_e( 'Variant', 'formhawk' ); ?></span><strong><?php echo esc_html( number_format_i18n( 100 * $analysis['variant_rate'], 1 ) . '%' ); ?></strong><small><?php echo esc_html( sprintf( /* translators: 1: views, 2: conversions, 3: traffic percentage. */ __( '%1$d views · %2$d conversions · %3$d%% traffic', 'formhawk' ), absint( $totals[ $variants[1]['id'] ]['views'] ?? 0 ), absint( $totals[ $variants[1]['id'] ][ $metric ] ?? 0 ), absint( $variants[1]['traffic_weight'] ) ) ); ?></small></div><div><span><?php esc_html_e( 'Probability better', 'formhawk' ); ?></span><strong><?php echo esc_html( number_format_i18n( 100 * $analysis['probability_to_be_best'], 1 ) . '%' ); ?></strong><small><?php echo esc_html( strtoupper( str_replace( '_', ' ', $analysis['decision'] ) ) . ' · ' . __( 'Beta-Binomial posterior', 'formhawk' ) ); ?></small></div></div>
 					<?php endif; ?>
@@ -675,7 +731,16 @@ final class Admin {
 					<div class="fh-cro-empty"><h3><?php esc_html_e( 'Collecting data', 'formhawk' ); ?></h3><p><?php esc_html_e( 'Formhawk needs more traffic before Autopilot can safely optimize this form.', 'formhawk' ); ?></p></div><?php endif; ?>
 				<details class="fh-cro-settings"><summary><?php esc_html_e( 'Autopilot mode and safety budget', 'formhawk' ); ?></summary>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><input type="hidden" name="action" value="formhawk_autopilot"><input type="hidden" name="operation" value="save"><input type="hidden" name="form_id" value="<?php echo esc_attr( (string) $form['id'] ); ?>"><?php wp_nonce_field( 'formhawk_autopilot' ); ?>
-				<div class="fh-cro-settings-grid"><label><?php esc_html_e( 'Mode', 'formhawk' ); ?><select name="mode"><option value="observe" <?php selected( $settings['mode'], 'observe' ); ?>><?php esc_html_e( 'Observe', 'formhawk' ); ?></option><option value="approve" <?php selected( $settings['mode'], 'approve' ); ?>><?php esc_html_e( 'Approve', 'formhawk' ); ?></option><option value="full" <?php selected( $settings['mode'], 'full' ); ?>><?php esc_html_e( 'Full Autopilot', 'formhawk' ); ?></option></select></label><label><?php esc_html_e( 'Aggressiveness', 'formhawk' ); ?><select name="aggressiveness"><option value="conservative" <?php selected( $settings['aggressiveness'], 'conservative' ); ?>><?php esc_html_e( 'Conservative', 'formhawk' ); ?></option><option value="balanced" <?php selected( $settings['aggressiveness'], 'balanced' ); ?>><?php esc_html_e( 'Balanced', 'formhawk' ); ?></option><option value="aggressive" <?php selected( $settings['aggressiveness'], 'aggressive' ); ?>><?php esc_html_e( 'Aggressive', 'formhawk' ); ?></option></select></label><label><?php esc_html_e( 'Maximum experimental traffic (%)', 'formhawk' ); ?><input type="number" min="10" max="50" name="max_experimental_traffic" value="<?php echo esc_attr( (string) $settings['max_experimental_traffic'] ); ?>"></label><label><?php esc_html_e( 'Minimum duration (days)', 'formhawk' ); ?><input type="number" min="3" max="60" name="min_duration_days" value="<?php echo esc_attr( (string) $settings['min_duration_days'] ); ?>"></label><label><?php esc_html_e( 'Minimum conversions', 'formhawk' ); ?><input type="number" min="20" max="10000" name="min_conversions" value="<?php echo esc_attr( (string) $settings['min_conversions'] ); ?>"></label><label><?php esc_html_e( 'Average lead value', 'formhawk' ); ?><input type="number" min="0" step="0.01" name="lead_value" value="<?php echo esc_attr( null === $settings['lead_value'] ? '' : $settings['lead_value'] ); ?>"></label><input type="hidden" name="currency" value="<?php echo esc_attr( $settings['currency'] ); ?>"></div><?php submit_button( __( 'Save Autopilot settings', 'formhawk' ), 'secondary', 'submit', false ); ?></form></details>
+				<div class="fh-cro-settings-grid">
+					<label><?php esc_html_e( 'Mode', 'formhawk' ); ?><select name="mode"><option value="observe" <?php selected( $settings['mode'], 'observe' ); ?>><?php esc_html_e( 'Observe', 'formhawk' ); ?></option><option value="approve" <?php selected( $settings['mode'], 'approve' ); ?>><?php esc_html_e( 'Approve', 'formhawk' ); ?></option><option value="full" <?php selected( $settings['mode'], 'full' ); ?>><?php esc_html_e( 'Full Autopilot', 'formhawk' ); ?></option></select></label>
+					<label><?php esc_html_e( 'Optimization objective', 'formhawk' ); ?><select name="optimization_objective"><option value="auto" <?php selected( $settings['optimization_objective'], 'auto' ); ?>><?php esc_html_e( 'Best available business metric', 'formhawk' ); ?></option><option value="submissions" <?php selected( $settings['optimization_objective'], 'submissions' ); ?>><?php esc_html_e( 'Confirmed submissions', 'formhawk' ); ?></option><option value="qualified_leads" <?php selected( $settings['optimization_objective'], 'qualified_leads' ); ?>><?php esc_html_e( 'Qualified leads / visitor', 'formhawk' ); ?></option><option value="won_leads" <?php selected( $settings['optimization_objective'], 'won_leads' ); ?>><?php esc_html_e( 'Won leads / visitor', 'formhawk' ); ?></option><option value="business_value" <?php selected( $settings['optimization_objective'], 'business_value' ); ?>><?php esc_html_e( 'Revenue / visitor', 'formhawk' ); ?></option></select></label>
+					<label><?php esc_html_e( 'Aggressiveness', 'formhawk' ); ?><select name="aggressiveness"><option value="conservative" <?php selected( $settings['aggressiveness'], 'conservative' ); ?>><?php esc_html_e( 'Conservative', 'formhawk' ); ?></option><option value="balanced" <?php selected( $settings['aggressiveness'], 'balanced' ); ?>><?php esc_html_e( 'Balanced', 'formhawk' ); ?></option><option value="aggressive" <?php selected( $settings['aggressiveness'], 'aggressive' ); ?>><?php esc_html_e( 'Aggressive', 'formhawk' ); ?></option></select></label>
+					<label><?php esc_html_e( 'Maximum experimental traffic (%)', 'formhawk' ); ?><input type="number" min="10" max="50" name="max_experimental_traffic" value="<?php echo esc_attr( (string) $settings['max_experimental_traffic'] ); ?>"></label>
+					<label><?php esc_html_e( 'Minimum duration (days)', 'formhawk' ); ?><input type="number" min="3" max="60" name="min_duration_days" value="<?php echo esc_attr( (string) $settings['min_duration_days'] ); ?>"></label>
+					<label><?php esc_html_e( 'Minimum conversions / outcomes', 'formhawk' ); ?><input type="number" min="20" max="10000" name="min_conversions" value="<?php echo esc_attr( (string) $settings['min_conversions'] ); ?>"></label>
+					<label><?php esc_html_e( 'Legacy average lead value', 'formhawk' ); ?><input type="number" min="0" step="0.01" name="lead_value" value="<?php echo esc_attr( null === $settings['lead_value'] ? '' : $settings['lead_value'] ); ?>"></label>
+					<input type="hidden" name="currency" value="<?php echo esc_attr( $settings['currency'] ); ?>">
+				</div><?php submit_button( __( 'Save Autopilot settings', 'formhawk' ), 'secondary', 'submit', false ); ?></form></details>
 				<div class="fh-cro-actions">
 				<?php
 				if ( $rollback_candidate ) {
@@ -700,6 +765,17 @@ final class Admin {
 		?>
 		<form class="fh-inline-form" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><input type="hidden" name="action" value="formhawk_autopilot"><input type="hidden" name="operation" value="<?php echo esc_attr( $operation ); ?>"><input type="hidden" name="form_id" value="<?php echo esc_attr( (string) $form_id ); ?>"><?php wp_nonce_field( 'formhawk_autopilot' ); ?><button type="submit" class="<?php echo esc_attr( $button_class ); ?>"><?php echo esc_html( $label ); ?></button></form>
 		<?php
+	}
+
+	private function primary_metric_label( $metric ) {
+		$labels = array(
+			'confirmed_conversion' => __( 'Primary metric: provider-confirmed conversion.', 'formhawk' ),
+			'observed_submit_rate' => __( 'Primary metric: observed submit rate; confirmed conversion is unavailable for generic HTML.', 'formhawk' ),
+			'qualified_leads'      => __( 'Primary metric: qualified leads per visitor. Recent unknown outcomes remain maturing.', 'formhawk' ),
+			'won_leads'            => __( 'Primary metric: won leads per visitor. Recent unknown outcomes remain maturing.', 'formhawk' ),
+			'business_value'       => __( 'Primary metric: revenue per visitor. Winner selection uses robust revenue inference, not raw conversion.', 'formhawk' ),
+		);
+		return isset( $labels[ $metric ] ) ? $labels[ $metric ] : $labels['confirmed_conversion'];
 	}
 
 	private function render_diagnostics_output( array $mail, array $cro, array $checks ) {

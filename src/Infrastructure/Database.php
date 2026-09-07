@@ -4,6 +4,7 @@ namespace Formhawk\Infrastructure;
 
 use Formhawk\Infrastructure\Migrations\Version4;
 use Formhawk\Infrastructure\Migrations\Version5;
+use Formhawk\Infrastructure\Migrations\Version6;
 
 final class Database {
 	public static function dimension_lock_name() {
@@ -76,10 +77,41 @@ final class Database {
 		return $wpdb->prefix . 'formhawk_optimization_history';
 	}
 
+	public static function submissions_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_submissions'; }
+	public static function outcomes_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_outcomes'; }
+	public static function submission_fields_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_submission_fields'; }
+	public static function field_definitions_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_field_definitions'; }
+	public static function form_versions_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_form_versions'; }
+	public static function field_value_daily_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_field_value_daily'; }
+	public static function field_roi_results_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_field_roi_results'; }
+	public static function field_roi_history_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_field_roi_history'; }
+	public static function outcome_api_keys_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_outcome_api_keys'; }
+	public static function business_audit_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_business_audit'; }
+
 	public static function install() {
 		self::install_core_schema();
 		self::install_placement_schema();
-		$migrated = Version4::run() && Version5::run();
+		$migrated = Version4::run() && Version5::run() && Version6::run();
 
 		if ( $migrated && self::tables_exist() && self::schema_is_current() ) {
 			update_option( 'formhawk_db_version', FORMHAWK_DB_VERSION, false );
@@ -123,6 +155,10 @@ final class Database {
 		}
 		if ( version_compare( $installed_version, '4', '>=' ) && version_compare( $installed_version, '5', '<' ) && Version5::run() ) {
 			update_option( 'formhawk_db_version', '5', false );
+			$installed_version = '5';
+		}
+		if ( version_compare( $installed_version, '5', '>=' ) && version_compare( $installed_version, '6', '<' ) && Version6::run() ) {
+			update_option( 'formhawk_db_version', '6', false );
 		}
 	}
 
@@ -244,7 +280,7 @@ final class Database {
 
 	public static function tables_exist() {
 		global $wpdb;
-		foreach ( array( self::forms_table(), self::daily_table(), self::fields_table(), self::placements_table(), self::placement_daily_table(), self::budgets_table(), self::dimensions_table(), self::cro_forms_table(), self::experiments_table(), self::variants_table(), self::experiment_daily_table(), self::optimization_history_table() ) as $table ) {
+		foreach ( self::all_tables() as $table ) {
 			$like = is_callable( array( $wpdb, 'esc_like' ) ) ? $wpdb->esc_like( $table ) : $table;
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- Runtime schema diagnostic for Formhawk-owned tables.
 			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $like ) );
@@ -269,7 +305,7 @@ final class Database {
 	}
 
 	public static function schema_is_current() {
-		return self::core_schema_is_current() && self::cro_schema_is_current( true );
+		return self::core_schema_is_current() && self::cro_schema_is_current( true ) && Version6::is_current();
 	}
 
 	public static function core_schema_is_current() {
@@ -299,10 +335,16 @@ final class Database {
 		return self::tables_have_columns( $required );
 	}
 
-	private static function tables_have_columns( array $required ) {
+	public static function tables_have_columns( array $required ) {
 
 		global $wpdb;
 		foreach ( $required as $table => $columns ) {
+			$like = is_callable( array( $wpdb, 'esc_like' ) ) ? $wpdb->esc_like( $table ) : $table;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- Avoids noisy SHOW COLUMNS errors while verifying an uninstalled schema.
+			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $like ) );
+			if ( $found !== $table ) {
+				return false;
+			}
 			foreach ( $columns as $column ) {
 				$sql = $wpdb->prepare( 'SHOW COLUMNS FROM %i LIKE %s', $table, $column );
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- Versioned schema verification for Formhawk-owned custom tables.
@@ -313,5 +355,36 @@ final class Database {
 		}
 
 		return true;
+	}
+
+	public static function field_roi_schema_is_current() {
+		return version_compare( (string) get_option( 'formhawk_db_version', '' ), '6', '>=' );
+	}
+
+	public static function all_tables() {
+		return array(
+			self::forms_table(),
+			self::daily_table(),
+			self::fields_table(),
+			self::placements_table(),
+			self::placement_daily_table(),
+			self::budgets_table(),
+			self::dimensions_table(),
+			self::cro_forms_table(),
+			self::experiments_table(),
+			self::variants_table(),
+			self::experiment_daily_table(),
+			self::optimization_history_table(),
+			self::submissions_table(),
+			self::outcomes_table(),
+			self::submission_fields_table(),
+			self::field_definitions_table(),
+			self::form_versions_table(),
+			self::field_value_daily_table(),
+			self::field_roi_results_table(),
+			self::field_roi_history_table(),
+			self::outcome_api_keys_table(),
+			self::business_audit_table(),
+		);
 	}
 }

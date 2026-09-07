@@ -17,13 +17,14 @@ Formhawk stores aggregate analytics in your WordPress database to help identify 
 - Standard HTML form discovery, including dynamically inserted forms.
 - Local health reporting, placement analytics and configurable retention.
 - Autopilot CRO: safe runtime experiments, confirmed-conversion decisions, automatic guardrails, promotion and rollback without editing provider forms.
+- Field ROI Business Value Intelligence: privacy-safe outcome attribution, EVPV, qualified/won leads per visitor, robust revenue inference, evidence-aware recommendations and Field Value Map.
 - WordPress mail operation diagnostics. An accepted mail operation does not prove inbox delivery.
 
 Generic HTML submissions are observed browser attempts; provider-confirmed successes are separate evidence. See the [provider support matrix](docs/PROVIDER-SUPPORT.md) for capabilities, tested versions and remaining validation work.
 
 ## Privacy
 
-Free analytics use daily aggregates, without submitted field values, analytics cookies, persistent visitor/session identifiers or external Formhawk analytics transmission. Temporary frontend state lives in memory for the current page lifecycle. See [readme.txt](readme.txt) for the full product description and privacy details.
+Core analytics use daily aggregates, without submitted field values, analytics cookies, persistent visitor/session identifiers or external Formhawk analytics transmission. Field ROI adds only a cryptographically random per-submission linkage, structural field metadata and time-bounded outcome/value records; no visitor form value or raw CRM payload is stored. See [Field ROI architecture](docs/FIELD-ROI.md) and [readme.txt](readme.txt).
 
 ## Development
 
@@ -71,7 +72,7 @@ npm run build
 npm run build:release
 ```
 
-The installable archive is `dist/formhawk-0.4.0.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
+The installable archive is `dist/formhawk-0.5.0.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
 
 ## Project documentation
 
@@ -81,6 +82,7 @@ The installable archive is `dist/formhawk-0.4.0.zip`. Inspect the archive and ru
 - [Database migrations](docs/MIGRATIONS.md)
 - [Ingestion limits, evidence semantics and hardening](docs/HARDENING.md)
 - [Autopilot CRO architecture, statistics and safety](docs/AUTOPILOT-CRO.md)
+- [Field ROI architecture, Outcome API, formulas and privacy](docs/FIELD-ROI.md)
 - [Free roadmap](docs/ROADMAP-FREE.md)
 - [Pro roadmap](docs/ROADMAP-PRO.md)
 - [Changelog](readme.txt#changelog)

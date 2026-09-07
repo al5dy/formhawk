@@ -6,6 +6,7 @@ const PROVIDERS = Object.freeze({
 });
 
 const SERVER_PROVIDERS = new Set([PROVIDERS.CF7, PROVIDERS.WPFORMS, PROVIDERS.ELEMENTOR]);
+const SUBMISSION_FIELD = '_formhawk_submission';
 
 export function cleanText(value, max = 191) {
 	return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -255,6 +256,19 @@ export function cssEscape(value) {
 	return String(value).replace(/([ #;?%&,.+*~':"!^$[\]()=>|/@])/g, '\\$1');
 }
 
+export function opaqueSubmissionId(browserWindow) {
+	try {
+		const bytes = new Uint8Array(16);
+		browserWindow.crypto.getRandomValues(bytes);
+		const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
+		return `fh_${browserWindow.btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+	} catch {
+		// A weak fallback would undermine the privacy boundary. Attribution is
+		// simply unavailable in obsolete/locked-down browsers.
+		return '';
+	}
+}
+
 export function createTracker(browserWindow, browserDocument, suppliedConfig = {}) {
 	const config = suppliedConfig || {};
 	if (!config.endpoint || !config.token) {
@@ -489,6 +503,17 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 		cacheFields(form);
 		activeForms.add(form);
 		state.currentForm = form;
+		if (config.outcomeAttribution && SERVER_PROVIDERS.has(state.meta.provider) && !technicalHiddenAttribute(form, SUBMISSION_FIELD)) {
+			const publicId = opaqueSubmissionId(browserWindow);
+			if (publicId) {
+				const marker = browserDocument.createElement('input');
+				marker.setAttribute('type', 'hidden');
+				marker.setAttribute('name', SUBMISSION_FIELD);
+				marker.setAttribute('value', publicId);
+				marker.setAttribute('data-formhawk-technical', 'submission-link');
+				form.appendChild(marker);
+			}
+		}
 		if (!state.viewed) {
 			if (intersectionObserver) {
 				intersectionObserver.observe(form);
@@ -516,7 +541,7 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 			if (!SERVER_PROVIDERS.has(current.meta.provider)) {
 				current.completed = true;
 			}
-		});
+		}, true);
 	}
 
 	function trackForm(form) {

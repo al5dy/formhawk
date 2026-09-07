@@ -4,22 +4,28 @@ namespace Formhawk\CRO\Attribution;
 
 use Formhawk\Contracts\EventRecorderInterface;
 use Formhawk\CRO\ExperimentRepository;
+use Formhawk\Outcomes\OutcomeAttribution;
 
 final class AttributingEventRecorder implements EventRecorderInterface {
 	private $inner;
 	private $contexts;
 	private $experiments;
+	private $outcomes;
 
-	public function __construct( EventRecorderInterface $inner, RequestContext $contexts, ExperimentRepository $experiments = null ) {
+	public function __construct( EventRecorderInterface $inner, RequestContext $contexts, ExperimentRepository $experiments = null, OutcomeAttribution $outcomes = null ) {
 		$this->inner       = $inner;
 		$this->contexts    = $contexts;
 		$this->experiments = $experiments ? $experiments : new ExperimentRepository();
+		$this->outcomes    = $outcomes;
 	}
 
 	public function record_success( $provider, $provider_form_id, $title, $page_path, array $context = array() ) {
 		$result = $this->inner->record_success( $provider, $provider_form_id, $title, $page_path, $context );
 		if ( $result ) {
 			$this->record( $provider, $provider_form_id, array( 'confirmed_successes' => 1 ) );
+			if ( $this->outcomes ) {
+				$this->outcomes->attribute( $provider, $provider_form_id, $title, $page_path, $context );
+			}
 		}
 		return $result;
 	}

@@ -1,11 +1,11 @@
 <?php
 
 if ( ! defined( 'FORMHAWK_VERSION' ) ) {
-	define( 'FORMHAWK_VERSION', '0.2.0' );
+	define( 'FORMHAWK_VERSION', '0.5.0' );
 }
 
 if ( ! defined( 'FORMHAWK_DB_VERSION' ) ) {
-	define( 'FORMHAWK_DB_VERSION', '3' );
+	define( 'FORMHAWK_DB_VERSION', '6' );
 }
 
 if ( ! defined( 'FORMHAWK_FILE' ) ) {

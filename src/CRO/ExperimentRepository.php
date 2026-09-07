@@ -19,6 +19,7 @@ final class ExperimentRepository {
 			'mode'                     => 'approve',
 			'state'                    => 'collecting',
 			'aggressiveness'           => 'balanced',
+			'optimization_objective'   => 'auto',
 			'max_experimental_traffic' => 50,
 			'min_duration_days'        => 7,
 			'min_conversions'          => 50,
@@ -28,10 +29,10 @@ final class ExperimentRepository {
 		$data     = array_merge( $defaults, $this->normalize_settings( $input ) );
 		$sql      = $wpdb->prepare(
 			'INSERT INTO %i
-				(form_id, mode, state, aggressiveness, max_experimental_traffic, min_duration_days, min_conversions, lead_value, currency, baseline_json, previous_baseline_json, enabled_at_utc, updated_at_utc)
-			VALUES (%d, %s, %s, %s, %d, %d, %d, %s, %s, %s, %s, %s, %s)
+				(form_id, mode, state, aggressiveness, optimization_objective, max_experimental_traffic, min_duration_days, min_conversions, lead_value, currency, baseline_json, previous_baseline_json, enabled_at_utc, updated_at_utc)
+			VALUES (%d, %s, %s, %s, %s, %d, %d, %d, %s, %s, %s, %s, %s, %s)
 			ON DUPLICATE KEY UPDATE
-				mode = VALUES(mode), aggressiveness = VALUES(aggressiveness),
+				mode = VALUES(mode), aggressiveness = VALUES(aggressiveness), optimization_objective = VALUES(optimization_objective),
 				max_experimental_traffic = VALUES(max_experimental_traffic),
 				min_duration_days = VALUES(min_duration_days), min_conversions = VALUES(min_conversions),
 				lead_value = VALUES(lead_value), currency = VALUES(currency), updated_at_utc = VALUES(updated_at_utc)',
@@ -40,6 +41,7 @@ final class ExperimentRepository {
 			$data['mode'],
 			$data['state'],
 			$data['aggressiveness'],
+			$data['optimization_objective'],
 			$data['max_experimental_traffic'],
 			$data['min_duration_days'],
 			$data['min_conversions'],
@@ -853,6 +855,9 @@ final class ExperimentRepository {
 		}
 		if ( isset( $input['aggressiveness'] ) && in_array( $input['aggressiveness'], array( 'conservative', 'balanced', 'aggressive' ), true ) ) {
 			$output['aggressiveness'] = $input['aggressiveness'];
+		}
+		if ( isset( $input['optimization_objective'] ) && in_array( $input['optimization_objective'], array( 'auto', 'submissions', 'qualified_leads', 'won_leads', 'business_value' ), true ) ) {
+			$output['optimization_objective'] = $input['optimization_objective'];
 		}
 		foreach ( array( 'max_experimental_traffic', 'min_duration_days', 'min_conversions' ) as $key ) {
 			if ( isset( $input[ $key ] ) ) {

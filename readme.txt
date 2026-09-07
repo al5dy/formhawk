@@ -1,14 +1,14 @@
 === Formhawk ===
 Contributors: al5dy
-Tags: form analytics, contact form 7, wpforms, elementor forms, form abandonment
+Tags: form analytics, field roi, contact form 7, wpforms, lead attribution
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.4.0
+Stable tag: 0.5.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Privacy-first form analytics and Autopilot CRO with confirmed conversions — without cookies or external tracking.
+Privacy-first form analytics, Field ROI and business-value Autopilot — without cookies or field-value tracking.
 
 == Description ==
 
@@ -69,6 +69,26 @@ See:
 * How often individual fields create friction.
 
 This helps you identify fields that may be confusing, unnecessary, incorrectly configured, or hurting conversion.
+
+= Field ROI — Business Value Intelligence =
+
+Field ROI answers a harder question than “where do visitors abandon?”: **is a field worth asking at all?**
+
+When provider-confirmed submissions are linked to qualified, won, lost, spam or duplicate outcomes, Formhawk evaluates both sides of the trade-off:
+
+* Conversion cost and validation friction.
+* Qualified leads per visitor.
+* Won leads per visitor.
+* Revenue per visitor and expected value contribution.
+* Outcome and revenue coverage.
+* Sample size, maturity and confidence.
+* A deterministic recommendation and Field Value Map verdict.
+
+Verdicts include **Money Maker**, **Conversion Killer**, **Qualifier**, **Free Value**, **Neutral** and **Unknown**. A field may reduce raw submissions and still be worth keeping when it improves business value per visitor.
+
+Formhawk never turns correlation into causation. Historical friction is labelled observational and uses “associated with” language. Measured causal lift appears only for a valid controlled Autopilot field-presentation experiment that explicitly targets the field; it describes the current configuration versus that tested alternative, not an untested removal. Large experiments that also pass sample, coverage and directional-probability thresholds are labelled strong experimental evidence.
+
+Field ROI includes an onboarding flow, protected Outcome REST API, manual outcomes, hashed/revocable API keys, immutable decision history, Field Value Map and a Business Value Intelligence card on each form detail screen.
 
 = Know when a form stops working =
 
@@ -193,10 +213,19 @@ Safety remains the first constraint:
 * Promoted winners are monitored and can be rolled back automatically.
 * Assignment exists only for the current page lifecycle, with no cookie or browser storage.
 
+For Qualified Leads, Won Leads and Business Value objectives, a raw-submission
+decline is not treated as terminal harm by itself: a useful qualifier may reduce
+volume while increasing value per visitor. Provider failures, validation, JavaScript
+errors and latency remain hard guardrails. Delayed business-outcome regression is
+reported in immutable evidence history; automatic post-promotion rollback on that
+delayed signal is not included in 0.5.0.
+
 Choose Observe, Approve or Full Autopilot mode. Approve is the safe default. The
 form detail screen explains the opportunity, live result, evidence, optimization
-history and compounded measured impact. Optional average lead value enables a
-transparent additional-value estimate.
+history and compounded measured impact. With Field ROI enabled, Autopilot can
+optimize submissions, qualified leads, won leads or business value. Revenue per
+visitor is preferred when mature revenue coverage is sufficient; qualified leads
+per visitor is the fallback.
 
 = Privacy-first form analytics =
 
@@ -212,8 +241,8 @@ Formhawk is intentionally designed without visitor-level analytics.
 * Phone numbers entered into forms.
 * Message contents.
 * IP addresses.
-* Visitor IDs.
-* Session IDs.
+* Persistent visitor IDs.
+* Persistent session IDs.
 * User agents.
 * Email recipients.
 * Email subjects.
@@ -226,9 +255,19 @@ Formhawk also creates:
 * No `sessionStorage` tracking.
 * No persistent browser identifier.
 
-Temporary per-form state exists only in JavaScript memory for the current page.
+For supported provider-confirmed submissions, Field ROI creates one cryptographically
+random opaque `fh_…` submission ID. It contains no email, phone, user ID, IP or
+fingerprint, is scoped to that submission, is removed from provider payloads before
+entry/mail processing, and exists only to attach later business outcomes.
 
-Analytics are stored locally in your WordPress database as aggregate statistics.
+Field ROI stores only structural field presence/requiredness, provider structural
+IDs, outcome transitions, integer minor-unit value, ISO currency and a hash of an
+optional external reference. It never stores the CRM payload or submitted field
+values. Temporary form state exists only in JavaScript memory for the current page.
+
+Analytics and the time-bounded Field ROI attribution journal are stored locally in
+your WordPress database. Daily aggregates and immutable decision snapshots survive
+linkage expiry.
 
 **No Formhawk analytics data is sent to an external Formhawk analytics service.**
 
@@ -341,7 +380,7 @@ The goal is simple:
 
 * No analytics cookies.
 * No persistent browser storage.
-* No visitor IDs.
+* No persistent visitor IDs; Field ROI uses only a per-submission opaque linkage.
 * No IP address storage.
 * No user-agent storage.
 * No submitted field values.
@@ -534,6 +573,16 @@ Yes.
 
 The `formhawk_event_recorded` action fires after an aggregate event is recorded.
 
+= How do I send a qualified or won outcome? =
+
+Open **Formhawk → Field ROI → Outcome API**, create a dedicated key, and POST a
+strict JSON object to `/wp-json/formhawk/v1/outcomes`. Send the opaque
+`submission_id`, canonical `status`, integer `value_minor`, ISO currency and an
+idempotency key. WordPress Application Password authentication is also supported.
+
+Developers can call `formhawk_record_outcome()` locally. Full examples and
+privacy/retention semantics are documented in `docs/FIELD-ROI.md` in the public source repository.
+
 = How long does Formhawk keep analytics? =
 
 You can choose a retention period of:
@@ -557,9 +606,24 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 2. Analyze views, starts, submissions, abandonment, conversion rates and health for an individual form.
 3. Find fields associated with abandonment and validation friction.
 4. Monitor WordPress email health and run a manual mail diagnostic test.
-5. Control analytics retention and whether data is removed when Formhawk is uninstalled.
+5. Compare field friction and business value on the Field Value Map.
+6. Inspect evidence, confidence, mature outcomes and immutable Field ROI history.
+7. Configure Outcome API keys, business objectives and attribution retention.
 
 == Changelog ==
+
+= 0.5.0 =
+
+* Added Field ROI Business Value Intelligence with EVPV, qualified/won leads per visitor, outcome coverage, maturity diagnostics and deterministic recommendations.
+* Added Money Maker, Conversion Killer, Qualifier, Free Value, Neutral and Unknown verdicts plus an accessible Field Value Map, detail view and immutable timeline.
+* Added privacy-safe cryptographic submission attribution for Contact Form 7, WPForms and Elementor Pro without storing field values, IP addresses or fingerprints.
+* Added append-only Qualified, Unqualified, Won, Lost, Spam, Duplicate, Unknown and value-adjustment outcomes with integer minor currency units.
+* Added a strict authenticated Outcome REST API, Application Password support, hashed/revocable dedicated API keys, replay protection, global idempotency and rate limiting.
+* Added stable provider field definitions, structural schema snapshots, bounded linkage retention, daily value aggregates, background evaluation and race-safe resumable scheduling.
+* Added robust seeded revenue inference for zero-inflated and heavy-tailed outcomes; actual revenue totals are never winsorized.
+* Separated observational, quasi-experimental, experimental and strong-experimental evidence language; required-field causal ROI stays unavailable without an experiment.
+* Added Business Value, Qualified Leads and Won Leads Autopilot objectives so winners are not selected on raw submissions alone.
+* Added database migration v6, security/privacy/statistics regression coverage and developer documentation.
 
 = 0.4.0 =
 

@@ -89,23 +89,25 @@ final class GuardrailEvaluator {
 			}
 		}
 
-		$guard_policy = array_merge(
-			$policy,
-			array(
-				'minimum_views_per_variant' => $policy['guardrail_minimum_views'],
-				'minimum_conversions'       => 1,
-				'minimum_runtime_days'      => 0,
-				'probability_to_be_best'    => $policy['guardrail_harm_probability'],
-			)
-		);
-		$analysis     = $this->statistics->evaluate( $control, $variant, $guard_policy, 999 );
-		if ( ( 1 - $analysis['probability_to_be_best'] ) >= $policy['guardrail_harm_probability']
-			&& $analysis['control_rate'] - $analysis['variant_rate'] >= $policy['guardrail_absolute_conversion_drop'] ) {
-			return array(
-				'triggered' => true,
-				'reason'    => 'confirmed_conversion_harm',
-				'analysis'  => $analysis,
+		if ( empty( $policy['business_value_objective'] ) ) {
+			$guard_policy = array_merge(
+				$policy,
+				array(
+					'minimum_views_per_variant' => $policy['guardrail_minimum_views'],
+					'minimum_conversions'       => 1,
+					'minimum_runtime_days'      => 0,
+					'probability_to_be_best'    => $policy['guardrail_harm_probability'],
+				)
 			);
+			$analysis     = $this->statistics->evaluate( $control, $variant, $guard_policy, 999 );
+			if ( ( 1 - $analysis['probability_to_be_best'] ) >= $policy['guardrail_harm_probability']
+				&& $analysis['control_rate'] - $analysis['variant_rate'] >= $policy['guardrail_absolute_conversion_drop'] ) {
+				return array(
+					'triggered' => true,
+					'reason'    => 'confirmed_conversion_harm',
+					'analysis'  => $analysis,
+				);
+			}
 		}
 
 		return array(

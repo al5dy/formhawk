@@ -36,6 +36,8 @@ final class WPForms implements FormIntegrationInterface {
 			ProviderCatalog::CAP_MULTI_STEP,
 			ProviderCatalog::CAP_STABLE_FIELD_IDS,
 			ProviderCatalog::CAP_DYNAMIC_RENDERING,
+			ProviderCatalog::CAP_SUBMISSION_ATTRIBUTION,
+			ProviderCatalog::CAP_FIELD_ROI,
 		);
 	}
 
@@ -54,7 +56,16 @@ final class WPForms implements FormIntegrationInterface {
 
 		// Neither submitted values nor entry_id are needed to establish provider-confirmed success.
 		$this->completed[ $metadata['id'] ] = true;
-		$this->events->record_success( $this->id(), $metadata['id'], $metadata['title'], $this->submission_path() );
+		$this->events->record_success(
+			$this->id(),
+			$metadata['id'],
+			$metadata['title'],
+			$this->submission_path(),
+			array(
+				'provider_entry_id' => is_scalar( $entry_id ) && absint( $entry_id ) ? (string) absint( $entry_id ) : '',
+				'fields'            => $this->structural_fields( $form_data ),
+			)
+		);
 	}
 
 	public function initial_errors( $errors, $form_data ) {
@@ -139,6 +150,29 @@ final class WPForms implements FormIntegrationInterface {
 			);
 		}
 
+		return $fields;
+	}
+
+	private function structural_fields( $form_data ) {
+		$fields      = array();
+		$definitions = is_array( $form_data ) && isset( $form_data['fields'] ) && is_array( $form_data['fields'] ) ? $form_data['fields'] : array();
+		foreach ( array_slice( $definitions, 0, 50, true ) as $field_id => $definition ) {
+			if ( ! is_array( $definition ) ) {
+				continue; }
+			$type = Sanitizer::field_type( isset( $definition['type'] ) ? $definition['type'] : '' );
+			if ( in_array( $type, array( 'html', 'divider', 'pagebreak', 'captcha', 'hidden', 'entry-preview' ), true ) ) {
+				continue; }
+			$key = Sanitizer::identifier( isset( $definition['id'] ) ? $definition['id'] : $field_id, '' );
+			if ( '' === $key ) {
+				continue; }
+			$fields[] = array(
+				'key'      => $key,
+				'label'    => Sanitizer::field_label( isset( $definition['label'] ) ? $definition['label'] : $key ),
+				'type'     => $type,
+				'required' => ! empty( $definition['required'] ),
+				'position' => count( $fields ),
+			);
+		}
 		return $fields;
 	}
 

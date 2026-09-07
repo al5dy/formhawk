@@ -15,6 +15,12 @@ use Formhawk\Http\EventsController;
 use Formhawk\Infrastructure\Cleanup;
 use Formhawk\Infrastructure\Database;
 use Formhawk\Infrastructure\Privacy;
+use Formhawk\Infrastructure\ModuleGate;
+use Formhawk\Outcomes\Http\OutcomesController;
+use Formhawk\Outcomes\OutcomeAttribution;
+use Formhawk\Outcomes\SubmissionContext;
+use Formhawk\ROI\FieldROIAdmin;
+use Formhawk\ROI\FieldROIScheduler;
 use Formhawk\Integrations\ContactForm7;
 use Formhawk\Integrations\ElementorForms;
 use Formhawk\Integrations\GenericForm;
@@ -48,7 +54,13 @@ final class Plugin {
 		$cro      = new ExperimentRepository();
 		$context  = new RequestContext();
 		$context->register();
-		$provider_events = new AttributingEventRecorder( $ingestor, $context, $cro );
+		$outcome_attribution = null;
+		if ( self::field_roi_collecting() ) {
+			$submission_context = new SubmissionContext();
+			$submission_context->register();
+			$outcome_attribution = new OutcomeAttribution( $submission_context, $context, $forms );
+		}
+		$provider_events = new AttributingEventRecorder( $ingestor, $context, $cro, $outcome_attribution );
 		$registry        = new IntegrationRegistry(
 			array(
 				new ContactForm7( $provider_events ),
@@ -59,6 +71,11 @@ final class Plugin {
 		);
 
 		( new EventsController( $ingestor ) )->register();
+		if ( Database::field_roi_schema_is_current() && ( new ModuleGate() )->enabled( 'field_roi' ) ) {
+			( new OutcomesController() )->register();
+			( new FieldROIScheduler() )->register();
+			( new FieldROIAdmin() )->register();
+		}
 		if ( Database::cro_schema_is_current() ) {
 			( new CROConfigController( $cro ) )->register();
 			( new CROEventsController( $cro ) )->register();
@@ -140,10 +157,11 @@ final class Plugin {
 		);
 
 		$config = array(
-			'endpoint' => esc_url_raw( rest_url( 'formhawk/v1/events' ) ),
-			'token'    => EventsController::public_token(),
-			'path'     => self::current_path(),
-			'debug'    => (bool) ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+			'endpoint'           => esc_url_raw( rest_url( 'formhawk/v1/events' ) ),
+			'token'              => EventsController::public_token(),
+			'path'               => self::current_path(),
+			'debug'              => (bool) ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+			'outcomeAttribution' => self::field_roi_collecting(),
 		);
 
 		wp_add_inline_script(
@@ -159,5 +177,13 @@ final class Plugin {
 		$request_uri = is_scalar( $request_uri ) ? sanitize_text_field( (string) $request_uri ) : '/';
 		$path        = wp_parse_url( $request_uri, PHP_URL_PATH );
 		return is_string( $path ) && '' !== $path ? $path : '/';
+	}
+
+	private static function field_roi_collecting() {
+		if ( ! Database::field_roi_schema_is_current() || ! ( new ModuleGate() )->enabled( 'field_roi' ) ) {
+			return false;
+		}
+		$settings = get_option( 'formhawk_field_roi_settings', array() );
+		return is_array( $settings ) && ! empty( $settings['enabled'] );
 	}
 }

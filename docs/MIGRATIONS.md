@@ -99,3 +99,29 @@ On DDL failure, normal forms and existing analytics remain available while the
 upgrade retries. Autopilot stays unavailable until all five tables verify. An
 intentional downgrade should restore the matching database backup; version 5
 tables are not destructively removed during plugin deactivation.
+
+## Version 5 to 6 (Formhawk 0.5.0)
+
+Version 6 is an additive Field ROI migration. It creates stable field definitions,
+structural form-version snapshots, opaque provider-confirmed submission linkage,
+an append-only outcome journal, structural submission-field membership, daily
+value aggregates, current ROI projections, immutable decision history, hashed API
+key metadata and a PII-free structural audit log. It also adds
+`optimization_objective` to the per-form Autopilot policy.
+
+No version-5 event is converted into a submission or business outcome: historical
+provider events cannot be linked honestly after the fact. Collection begins only
+after v6 verifies all tables and columns. `FORMHAWK_DB_VERSION` advances to `6`
+only after that verification succeeds. Re-running `Version6::run()` is idempotent.
+
+WON rows use a nullable unique terminal-value key in addition to the global
+idempotency hash. This prevents two concurrent webhook requests with different
+replay keys from counting the same initial won revenue twice; later corrections
+must be append-only `value_adjustment` rows. Currency is fixed per submission and
+no implicit FX conversion occurs.
+
+Submission-level linkage receives a fixed expiry at attribution time (30, 60, 90
+or 180 days). Bounded cleanup first preserves daily aggregate/result/history data,
+then deletes outcome and structural child rows, and finally deletes the expired
+submission. Deactivation never drops data. An intentional downgrade should restore
+the matching database backup because older code does not understand v6 outcomes.

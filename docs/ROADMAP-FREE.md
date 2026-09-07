@@ -1,12 +1,12 @@
 # Formhawk Free — Product & Engineering Roadmap
 
 **Document status:** Living roadmap containing future work only  
-**Code baseline reviewed:** Formhawk 0.4.0  
+**Code baseline reviewed:** Formhawk 0.5.0  
 **Review date:** 2026-09-07  
 **Target:** a trustworthy Formhawk Free 1.0 distributed through WordPress.org  
 **Product boundary:** a complete, privacy-first, local form analytics and health product for one WordPress installation
 
-This document intentionally does not repeat functionality already shipped in Formhawk 0.2.0. The current feature list belongs in `readme.txt`, `docs/PROVIDER-SUPPORT.md`, and release changelogs. If an item below is completed, remove it from this roadmap and document it in the release notes.
+This document intentionally does not repeat functionality already shipped in the current baseline. The current feature list belongs in `readme.txt`, `docs/PROVIDER-SUPPORT.md`, and release changelogs. If an item below is completed, remove it from this roadmap and document it in the release notes.
 
 ---
 

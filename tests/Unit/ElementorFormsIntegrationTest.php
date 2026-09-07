@@ -29,6 +29,27 @@ final class ElementorFormsIntegrationTest extends TestCase {
 		$this->assertSame( '81:widget7', $events->events[0]['provider_form_id'] );
 	}
 
+	public function test_success_exports_only_static_field_definitions_for_attribution() {
+		$events = new RecordingEventRecorder();
+		$record = new ElementorRecordDouble(
+			'widget-fields',
+			'Lead',
+			81,
+			array(
+				array(
+					'custom_id'   => 'phone',
+					'field_label' => 'Phone',
+					'field_type'  => 'tel',
+					'required'    => 'true',
+				),
+			),
+			array( 'phone' => '+375 private' )
+		);
+		( new ElementorForms( $events ) )->new_record( $record, new ElementorHandlerDouble() );
+		$this->assertSame( array( 'phone' ), wp_list_pluck( $events->events[0]['context']['fields'], 'key' ) );
+		$this->assertStringNotContainsString( '+375 private', wp_json_encode( $events->events ) );
+	}
+
 	public function test_validation_observes_error_keys_without_messages_or_values() {
 		$events      = new RecordingEventRecorder();
 		$integration = new ElementorForms( $events );

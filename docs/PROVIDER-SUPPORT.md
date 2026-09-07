@@ -19,6 +19,23 @@
 | Multi-step | Runtime safety proof required | Runtime safety proof required | Runtime safety proof required | Conditional/runtime safety proof required |
 | Primary result | Provider-confirmed conversion | Provider-confirmed conversion | Provider-confirmed conversion | Observed submit rate |
 
+## Field ROI attribution matrix
+
+| Capability | Contact Form 7 | WPForms Lite / Pro | Elementor Pro Forms | Standard HTML |
+|---|---:|---:|---:|---:|
+| Opaque submission ID | Yes | Yes | Yes | No universal confirmation |
+| Provider-confirmed linkage | Yes | Yes | Yes | No |
+| Provider entry mapping | Public lifecycle has no entry ID | Safe non-zero entry ID when available | Not persisted in v1 | No |
+| Stable native field identity | CF7 tag name | WPForms field ID | Elementor field `_id` | Best-effort only; ROI disabled |
+| Structural schema snapshot | Yes | Yes | Yes | No |
+| Controlled Field ROI | Safe Autopilot mutations | Safe Autopilot mutations | Safe Autopilot mutations | Not eligible |
+
+The Field ROI support flag means that the provider adapter can join a
+provider-confirmed success to an opaque Formhawk submission and stable structural
+field definitions. It does not mean that every provider configuration is safe for
+every experiment; conditional, required, security, payment, file and ambiguous
+controls continue to fail closed.
+
 All structural mutations use provider-native field identities where available and
 fail closed for conditional, required, security, legal, payment, CAPTCHA, upload
 or ambiguous fields. The signed attribution marker is removed before provider

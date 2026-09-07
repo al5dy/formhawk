@@ -53,4 +53,17 @@ final class ContactForm7IntegrationTest extends TestCase {
 		$integration->submitted( $form, $result );
 		$this->assertCount( 1, $recorder->events );
 	}
+
+	public function test_success_uses_form_tag_structure_without_submitted_values() {
+		$tag    = new class() {
+			public $name     = 'phone';
+			public $basetype = 'tel';
+			public function is_required() {
+				return true; }
+		};
+		$events = new RecordingEventRecorder();
+		( new ContactForm7( $events ) )->mail_sent( new ContactForm7Double( 81, 'Lead', array( $tag ) ) );
+		$this->assertSame( array( 'phone' ), wp_list_pluck( $events->events[0]['context']['fields'], 'key' ) );
+		$this->assertTrue( $events->events[0]['context']['fields'][0]['required'] );
+	}
 }

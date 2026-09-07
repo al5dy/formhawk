@@ -3,6 +3,7 @@
 namespace Formhawk\Tests\Integration;
 
 use Formhawk\Infrastructure\Database;
+use Formhawk\Infrastructure\Migrations\Version6;
 use PHPUnit\Framework\TestCase;
 
 final class DatabaseMigrationIntegrationTest extends TestCase {
@@ -17,20 +18,7 @@ final class DatabaseMigrationIntegrationTest extends TestCase {
 		$this->original_prefix  = $wpdb->prefix;
 		$this->original_version = get_option( 'formhawk_db_version', '' );
 		$wpdb->prefix           = $this->original_prefix . 'fh_migration_' . strtolower( wp_generate_password( 6, false, false ) ) . '_';
-		$this->test_tables      = array(
-			Database::placement_daily_table(),
-			Database::placements_table(),
-			Database::fields_table(),
-			Database::daily_table(),
-			Database::forms_table(),
-			Database::budgets_table(),
-			Database::dimensions_table(),
-			Database::cro_forms_table(),
-			Database::experiments_table(),
-			Database::variants_table(),
-			Database::experiment_daily_table(),
-			Database::optimization_history_table(),
-		);
+		$this->test_tables      = Database::all_tables();
 	}
 
 	protected function tearDown(): void {
@@ -106,9 +94,12 @@ final class DatabaseMigrationIntegrationTest extends TestCase {
 		update_option( 'formhawk_db_version', '1', false );
 		Database::maybe_upgrade();
 
-		$this->assertSame( '5', (string) get_option( 'formhawk_db_version', '' ) );
+		$this->assertSame( '6', (string) get_option( 'formhawk_db_version', '' ) );
 		$this->assertTrue( Database::tables_exist() );
 		$this->assertTrue( Database::schema_is_current() );
+		$this->assertSame( '0', $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', Database::submissions_table() ) ), 'Historical aggregate traffic must not be fabricated into outcome linkage.' );
+		$this->assertSame( array( 'field_definition_id', 'currency' ), $this->index_columns( Database::field_roi_results_table(), 'PRIMARY' ) );
+		$this->assertSame( array( 'form_id', 'stat_date', 'submitted_at_utc' ), $this->index_columns( Database::submissions_table(), 'form_submitted' ) );
 
 		$row = $wpdb->get_row(
 			$wpdb->prepare( 'SELECT * FROM %i WHERE form_id = %d', $daily, $form_id ),
@@ -125,10 +116,32 @@ final class DatabaseMigrationIntegrationTest extends TestCase {
 		);
 
 		Database::maybe_upgrade();
+		$this->assertTrue( Version6::run() );
+		$this->assertTrue( Version6::run() );
 		$this->assertSame(
 			'1',
 			$wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $daily ) )
 		);
+	}
+
+	private function index_columns( $table, $key_name ) {
+		global $wpdb;
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SHOW INDEX FROM %i', $table ), ARRAY_A );
+		$rows = array_values(
+			array_filter(
+				$rows,
+				static function ( $row ) use ( $key_name ) {
+					return $row['Key_name'] === $key_name;
+				}
+			)
+		);
+		usort(
+			$rows,
+			static function ( $left, $right ) {
+				return absint( $left['Seq_in_index'] ) <=> absint( $right['Seq_in_index'] );
+			}
+		);
+		return wp_list_pluck( $rows, 'Column_name' );
 	}
 
 	private function create_version_one_schema() {

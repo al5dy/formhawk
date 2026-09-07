@@ -18,17 +18,19 @@ final class AutopilotManager {
 	private $guardrails;
 	private $winners;
 	private $cache;
+	private $business_winners;
 
-	public function __construct( ExperimentRepository $experiments = null, FormRepository $forms = null, OpportunityDetector $opportunities = null, HypothesisEngine $hypotheses = null, VariantGenerator $variants = null, OptimizationPolicy $policy = null, GuardrailEvaluator $guardrails = null, WinnerSelector $winners = null, CacheCoordinator $cache = null ) {
-		$this->experiments   = $experiments ? $experiments : new ExperimentRepository();
-		$this->forms         = $forms ? $forms : new FormRepository();
-		$this->opportunities = $opportunities ? $opportunities : new OpportunityDetector();
-		$this->hypotheses    = $hypotheses ? $hypotheses : new HypothesisEngine();
-		$this->variants      = $variants ? $variants : new VariantGenerator();
-		$this->policy        = $policy ? $policy : new OptimizationPolicy();
-		$this->guardrails    = $guardrails ? $guardrails : new GuardrailEvaluator();
-		$this->winners       = $winners ? $winners : new WinnerSelector();
-		$this->cache         = $cache ? $cache : new CacheCoordinator();
+	public function __construct( ExperimentRepository $experiments = null, FormRepository $forms = null, OpportunityDetector $opportunities = null, HypothesisEngine $hypotheses = null, VariantGenerator $variants = null, OptimizationPolicy $policy = null, GuardrailEvaluator $guardrails = null, WinnerSelector $winners = null, CacheCoordinator $cache = null, BusinessValueWinnerSelector $business_winners = null ) {
+		$this->experiments      = $experiments ? $experiments : new ExperimentRepository();
+		$this->forms            = $forms ? $forms : new FormRepository();
+		$this->opportunities    = $opportunities ? $opportunities : new OpportunityDetector();
+		$this->hypotheses       = $hypotheses ? $hypotheses : new HypothesisEngine();
+		$this->variants         = $variants ? $variants : new VariantGenerator();
+		$this->policy           = $policy ? $policy : new OptimizationPolicy();
+		$this->guardrails       = $guardrails ? $guardrails : new GuardrailEvaluator();
+		$this->winners          = $winners ? $winners : new WinnerSelector();
+		$this->cache            = $cache ? $cache : new CacheCoordinator();
+		$this->business_winners = $business_winners ? $business_winners : new BusinessValueWinnerSelector();
 	}
 
 	public function register() {
@@ -112,7 +114,7 @@ final class AutopilotManager {
 				'type'           => $opportunity['type'],
 				'status'         => $status,
 				'hypothesis'     => $this->hypotheses->create( $opportunity ),
-				'primary_metric' => ProviderCatalog::has_server_success( $form['provider'] ) ? 'confirmed_conversion' : 'observed_submit_rate',
+				'primary_metric' => $this->primary_metric( $form, $settings ),
 				'evidence_level' => ProviderCROCapabilities::evidence_level( $form['provider'] ),
 				'policy'         => $policy,
 			),
@@ -146,9 +148,10 @@ final class AutopilotManager {
 			$this->experiments->route_to_control( $experiment['id'] );
 			return $this->finish( $form, $settings, $experiment, 'stopped_guardrail', 'corrupt_variant_configuration' );
 		}
-		$control = $this->metrics( $totals[ $variants[0]['id'] ] ?? array(), $experiment['primary_metric'] );
-		$variant = $this->metrics( $totals[ $variants[1]['id'] ] ?? array(), $experiment['primary_metric'] );
-		$guard   = $this->guardrails->evaluate( $control, $variant, $experiment['policy'] );
+		$control      = $this->metrics( $totals[ $variants[0]['id'] ] ?? array(), $experiment['primary_metric'] );
+		$variant      = $this->metrics( $totals[ $variants[1]['id'] ] ?? array(), $experiment['primary_metric'] );
+		$guard_policy = $this->guardrail_policy( $experiment );
+		$guard        = $this->guardrails->evaluate( $control, $variant, $guard_policy );
 		if ( $guard['triggered'] ) {
 			$this->experiments->route_to_control( $experiment['id'] );
 			$this->experiments->set_status( $experiment['id'], ExperimentStatus::PAUSED_GUARDRAIL );
@@ -165,7 +168,7 @@ final class AutopilotManager {
 			if ( $segment_control['views'] < $experiment['policy']['guardrail_minimum_views'] || $segment_variant['views'] < $experiment['policy']['guardrail_minimum_views'] ) {
 				continue;
 			}
-			$segment_guard = $this->guardrails->evaluate( $segment_control, $segment_variant, $experiment['policy'] );
+			$segment_guard = $this->guardrails->evaluate( $segment_control, $segment_variant, $guard_policy );
 			if ( $segment_guard['triggered'] ) {
 				$this->experiments->route_to_control( $experiment['id'] );
 				$this->cache->purge();
@@ -174,7 +177,9 @@ final class AutopilotManager {
 			}
 		}
 		$days     = $this->runtime_days( $experiment['started_at_utc'] );
-		$analysis = $this->winners->select( $control, $variant, $experiment['policy'], $days );
+		$analysis = in_array( $experiment['primary_metric'], array( 'business_value', 'qualified_leads', 'won_leads' ), true )
+			? $this->business_winners->select( $experiment, $variants, $experiment['policy'], $settings, $days )
+			: $this->winners->select( $control, $variant, $experiment['policy'], $days );
 		if ( 'winner' === $analysis['decision'] ) {
 			$baseline = isset( $variants[1]['config']['mutations'] ) && is_array( $variants[1]['config']['mutations'] ) ? $variants[1]['config']['mutations'] : array();
 			if ( ! $this->experiments->promote_experiment( $form['id'], $experiment['id'], $variants[1]['id'], $baseline ) ) {
@@ -206,7 +211,7 @@ final class AutopilotManager {
 		$control = $this->metrics( $totals[ $variants[0]['id'] ] ?? array(), $experiment['primary_metric'] );
 		$since   = $this->day_after_utc( $experiment['ended_at_utc'] );
 		$current = $this->metrics( $this->experiments->aggregate_since( $experiment['id'], $experiment['winner_variant_id'], $since ), $experiment['primary_metric'] );
-		$guard   = $this->guardrails->evaluate( $control, $current, $experiment['policy'] );
+		$guard   = $this->guardrails->evaluate( $control, $current, $this->guardrail_policy( $experiment ) );
 		if ( $guard['triggered'] ) {
 			if ( ! $this->experiments->rollback_experiment( $form['id'], $experiment['id'] ) ) {
 				return false;
@@ -216,7 +221,7 @@ final class AutopilotManager {
 			do_action( 'formhawk_cro_rollback', $experiment['id'], $experiment['winner_variant_id'] );
 			return true;
 		}
-		if ( $current['views'] >= $experiment['policy']['minimum_views_per_variant'] && $control['views'] >= $experiment['policy']['minimum_views_per_variant'] ) {
+		if ( ! $this->is_business_metric( $experiment['primary_metric'] ) && $current['views'] >= $experiment['policy']['minimum_views_per_variant'] && $control['views'] >= $experiment['policy']['minimum_views_per_variant'] ) {
 			$analysis     = $this->winners->select( $control, $current, array_merge( $experiment['policy'], array( 'minimum_runtime_days' => 1 ) ), $monitor_days );
 			$relative     = $control['conversions'] / max( 1, $control['views'] );
 			$current_rate = $current['conversions'] / max( 1, $current['views'] );
@@ -276,8 +281,30 @@ final class AutopilotManager {
 
 	private function metrics( array $row, $primary_metric ) {
 		$row['views']       = absint( $row['views'] ?? 0 );
-		$row['conversions'] = 'confirmed_conversion' === $primary_metric ? absint( $row['confirmed_successes'] ?? 0 ) : absint( $row['observed_submits'] ?? 0 );
+		$row['conversions'] = 'observed_submit_rate' === $primary_metric ? absint( $row['observed_submits'] ?? 0 ) : absint( $row['confirmed_successes'] ?? 0 );
 		return $row;
+	}
+
+	private function primary_metric( array $form, array $settings ) {
+		if ( ! ProviderCatalog::has_server_success( $form['provider'] ) ) {
+			return 'observed_submit_rate'; }
+		$objective = isset( $settings['optimization_objective'] ) ? $settings['optimization_objective'] : 'auto';
+		$field_roi = get_option( 'formhawk_field_roi_settings', array() );
+		if ( 'auto' === $objective && is_array( $field_roi ) && ! empty( $field_roi['enabled'] ) ) {
+			$objective = isset( $field_roi['objective'] ) ? $field_roi['objective'] : 'business_value';
+			$objective = 'qualified' === $objective ? 'qualified_leads' : ( 'won' === $objective ? 'won_leads' : $objective );
+		}
+		return in_array( $objective, array( 'business_value', 'qualified_leads', 'won_leads' ), true ) ? $objective : 'confirmed_conversion';
+	}
+
+	private function guardrail_policy( array $experiment ) {
+		$policy                             = $experiment['policy'];
+		$policy['business_value_objective'] = $this->is_business_metric( $experiment['primary_metric'] );
+		return $policy;
+	}
+
+	private function is_business_metric( $metric ) {
+		return in_array( $metric, array( 'business_value', 'qualified_leads', 'won_leads' ), true );
 	}
 
 	private function runtime_days( $started_at ) {

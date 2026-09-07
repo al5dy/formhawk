@@ -49,6 +49,7 @@ final class WPFormsIntegrationTest extends TestCase {
 		$this->assertCount( 1, $events->events );
 		$this->assertSame( 'success', $events->events[0]['type'] );
 		$this->assertSame( '55', $events->events[0]['provider_form_id'] );
+		$this->assertSame( array( '3', '4' ), wp_list_pluck( $events->events[0]['context']['fields'], 'key' ) );
 		$this->assertStringNotContainsString( 'visitor@example.test', wp_json_encode( $events->events ) );
 	}
 

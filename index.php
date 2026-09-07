@@ -1,2 +1,10 @@
 <?php
-// Silence is golden.
+/**
+ * Silence direct directory access.
+ *
+ * @package Formhawk
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}

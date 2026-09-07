@@ -46,3 +46,12 @@ await build({
 	outfile: 'assets/css/admin-cro.css',
 	legalComments: 'none',
 });
+
+await build({
+	entryPoints: ['resources/scss/field-roi.scss'],
+	bundle: true,
+	minify: true,
+	loader: {'.scss': 'css'},
+	outfile: 'assets/css/field-roi.css',
+	legalComments: 'none',
+});

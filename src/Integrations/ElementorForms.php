@@ -41,6 +41,8 @@ final class ElementorForms implements FormIntegrationInterface {
 			ProviderCatalog::CAP_MULTI_STEP,
 			ProviderCatalog::CAP_STABLE_FIELD_IDS,
 			ProviderCatalog::CAP_DYNAMIC_RENDERING,
+			ProviderCatalog::CAP_SUBMISSION_ATTRIBUTION,
+			ProviderCatalog::CAP_FIELD_ROI,
 		);
 	}
 
@@ -85,7 +87,7 @@ final class ElementorForms implements FormIntegrationInterface {
 		}
 
 		$this->terminal_succeeded[ $key ] = true;
-		$this->events->record_success( $this->id(), $metadata['id'], $metadata['title'], $this->submission_path() );
+		$this->events->record_success( $this->id(), $metadata['id'], $metadata['title'], $this->submission_path(), array( 'fields' => $this->structural_fields( $record ) ) );
 		if ( ! empty( $this->mail_observed[ $key ] ) ) {
 			$this->events->record_mail_success( $this->id(), $metadata['id'], $metadata['title'], $this->submission_path() );
 		}
@@ -201,6 +203,27 @@ final class ElementorForms implements FormIntegrationInterface {
 
 	private function is_non_trackable_field_type( $type ) {
 		return in_array( $type, array( 'hidden', 'html', 'step', 'recaptcha', 'recaptcha_v3', 'honeypot' ), true );
+	}
+
+	private function structural_fields( $record ) {
+		$definitions = is_object( $record ) && is_callable( array( $record, 'get_form_settings' ) ) ? $record->get_form_settings( 'form_fields' ) : array();
+		$fields      = array();
+		foreach ( array_slice( is_array( $definitions ) ? $definitions : array(), 0, 50 ) as $definition ) {
+			if ( ! is_array( $definition ) ) {
+				continue; }
+			$key  = Sanitizer::identifier( isset( $definition['custom_id'] ) ? $definition['custom_id'] : '', '' );
+			$type = Sanitizer::field_type( isset( $definition['field_type'] ) ? $definition['field_type'] : '' );
+			if ( '' === $key || $this->is_non_trackable_field_type( $type ) ) {
+				continue; }
+			$fields[] = array(
+				'key'      => $key,
+				'label'    => Sanitizer::field_label( isset( $definition['field_label'] ) ? $definition['field_label'] : $key ),
+				'type'     => $type,
+				'required' => ! empty( $definition['required'] ),
+				'position' => count( $fields ),
+			);
+		}
+		return $fields;
 	}
 
 	/**

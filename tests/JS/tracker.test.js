@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import trackerSource from '../../resources/js/tracker/index.js?raw';
-import {createTracker, detectProvider, eligible, fieldMeta} from '../../resources/js/tracker/index.js';
+import {createTracker, detectProvider, eligible, fieldMeta, opaqueSubmissionId} from '../../resources/js/tracker/index.js';
 
 function form(html) {
 	document.body.innerHTML = html;
@@ -112,6 +112,36 @@ describe('field normalization', () => {
 		expect(eligible(form('<form><input name="message"></form>'))).toBe(true);
 		expect(eligible(form('<form role="search"></form>'))).toBe(false);
 		expect(eligible(form('<form data-formhawk-ignore></form>'))).toBe(false);
+	});
+});
+
+describe('privacy-safe submission attribution', () => {
+	it('creates opaque cryptographic IDs and installs only a technical hidden marker', () => {
+		const id = opaqueSubmissionId(window);
+		expect(id).toMatch(/^fh_[A-Za-z0-9_-]{22}$/);
+		const element = form('<form class="wpforms-form" data-formid="42"><input name="wpforms[fields][1]" value="private-value"></form>');
+		const fetchMock = vi.fn(() => Promise.resolve({ok: true}));
+		window.fetch = fetchMock;
+		const instance = createTracker(window, document, {endpoint: '/events', token: 'public', outcomeAttribution: true});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		const marker = element.querySelector('input[name="_formhawk_submission"]');
+		expect(marker).not.toBeNull();
+		expect(marker.getAttribute('value')).toMatch(/^fh_[A-Za-z0-9_-]{22}$/);
+		expect(marker.getAttribute('value')).not.toContain('private-value');
+		instance.destroy();
+	});
+
+	it('does not add submission linkage before Field ROI onboarding enables collection', () => {
+		const element = form('<form class="wpforms-form" data-formid="42"><input name="wpforms[fields][1]"></form>');
+		window.fetch = vi.fn(() => Promise.resolve({ok: true}));
+		const instance = createTracker(window, document, {endpoint: '/events', token: 'public'});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		expect(element.querySelector('input[name="_formhawk_submission"]')).toBeNull();
+		instance.destroy();
+	});
+
+	it('fails closed when secure randomness is unavailable', () => {
+		expect(opaqueSubmissionId({crypto: null})).toBe('');
 	});
 });
 

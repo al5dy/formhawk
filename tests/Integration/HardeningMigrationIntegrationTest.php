@@ -135,7 +135,7 @@ final class HardeningMigrationIntegrationTest extends IsolatedStorageTestCase {
 		Database::maybe_upgrade();
 		Database::maybe_upgrade();
 		$this->assertTrue( Version4::is_current() );
-		$this->assertSame( '5', (string) get_option( 'formhawk_db_version' ) );
+		$this->assertSame( '6', (string) get_option( 'formhawk_db_version' ) );
 		$row = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM %i LIMIT 1', Database::daily_table() ), ARRAY_A );
 		$this->assertSame( '17', $row['submissions'] );
 		$this->assertSame( '11', $row['submit_attempts'] );
