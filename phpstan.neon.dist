@@ -1,0 +1,16 @@
+includes:
+	- vendor/szepeviktor/phpstan-wordpress/extension.neon
+
+parameters:
+	level: 5
+	bootstrapFiles:
+		- tools/phpstan-bootstrap.php
+	paths:
+		- formhawk.php
+		- uninstall.php
+		- src
+	tmpDir: .phpstan-cache
+	treatPhpDocTypesAsCertain: false
+	excludePaths:
+		analyse:
+			- vendor

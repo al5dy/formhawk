@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<ruleset name="Formhawk">
+	<description>WordPress Coding Standards and PHP 7.4 compatibility for Formhawk.</description>
+	<file>formhawk.php</file>
+	<file>uninstall.php</file>
+	<file>src</file>
+	<file>tests</file>
+	<exclude-pattern>*/vendor/*</exclude-pattern>
+	<exclude-pattern>*/node_modules/*</exclude-pattern>
+	<exclude-pattern>*/tests/JS/*</exclude-pattern>
+	<arg name="basepath" value="."/>
+	<arg name="colors"/>
+	<arg value="sp"/>
+	<rule ref="WordPress-Core">
+		<!-- Namespaced PSR-4 classes intentionally follow Formhawk's existing path/class convention. -->
+		<exclude name="WordPress.Files.FileName.NotHyphenatedLowercase"/>
+		<exclude name="WordPress.Files.FileName.InvalidClassFileName"/>
+	</rule>
+	<rule ref="WordPress-Extra"/>
+	<rule ref="PHPCompatibility">
+		<properties>
+			<property name="testVersion" value="7.4-"/>
+		</properties>
+	</rule>
+	<config name="minimum_supported_wp_version" value="6.4"/>
+	<config name="text_domain" value="formhawk"/>
+</ruleset>

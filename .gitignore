@@ -1,0 +1,36 @@
+# Installed development dependencies.
+/vendor/
+/node_modules/
+
+# Local build output and test caches (runtime assets stay tracked).
+/dist/
+/coverage/
+/.phpstan-cache/
+/.phpunit.cache/
+/.phpunit.result.cache
+/.eslintcache
+/test-results/
+/playwright-report/
+*.log
+
+# Local configuration and secrets.
+.env
+.env.*
+!.env.example
+auth.json
+/phpunit.xml
+/phpcs.xml
+/phpstan.neon
+*.sql
+*.sql.gz
+*.pem
+*.key
+
+# Editors and operating systems.
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
