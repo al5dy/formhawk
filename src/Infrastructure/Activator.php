@@ -2,6 +2,8 @@
 
 namespace Formhawk\Infrastructure;
 
+use Formhawk\CRO\AutopilotManager;
+
 final class Activator {
 	const CRON_HOOK = 'formhawk_daily_cleanup';
 
@@ -13,10 +15,14 @@ final class Activator {
 		if ( ! wp_next_scheduled( self::CRON_HOOK ) ) {
 			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', self::CRON_HOOK );
 		}
+		if ( ! wp_next_scheduled( AutopilotManager::CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', AutopilotManager::CRON_HOOK );
+		}
 	}
 
 	public static function deactivate() {
 		wp_clear_scheduled_hook( self::CRON_HOOK );
 		wp_clear_scheduled_hook( Cleanup::CONTINUE_HOOK );
+		wp_clear_scheduled_hook( AutopilotManager::CRON_HOOK );
 	}
 }

@@ -82,3 +82,20 @@ The benchmark creates randomly prefixed isolated tables, 100 synthetic forms,
 passes, checks frozen counters and zero new evidence, and repeats the migration.
 It removes only its own synthetic tables afterwards. Record wall time and memory
 for the actual deployment database; local timings are not a hosting guarantee.
+
+## Version 4 to 5 (Formhawk 0.4.0)
+
+Version 5 adds the aggregate-only Autopilot CRO schema: per-form policy/baseline,
+experiments, variants, daily arm/segment counters and immutable optimization
+history. The migration is additive and idempotent; target tables and evidence
+columns are verified before `formhawk_db_version` advances.
+
+No version-4 form or field aggregate is copied into an experiment. Historical
+traffic has no signed assignment and therefore cannot honestly become control
+evidence. Existing analytics and evidence semantics remain unchanged. Runtime
+baselines start empty, so upgrading alone never changes a provider form.
+
+On DDL failure, normal forms and existing analytics remain available while the
+upgrade retries. Autopilot stays unavailable until all five tables verify. An
+intentional downgrade should restore the matching database backup; version 5
+tables are not destructively removed during plugin deactivation.

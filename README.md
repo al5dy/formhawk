@@ -16,6 +16,7 @@ Formhawk stores aggregate analytics in your WordPress database to help identify 
 - Contact Form 7, WPForms and Elementor Pro Forms adapters with provider-confirmed outcomes.
 - Standard HTML form discovery, including dynamically inserted forms.
 - Local health reporting, placement analytics and configurable retention.
+- Autopilot CRO: safe runtime experiments, confirmed-conversion decisions, automatic guardrails, promotion and rollback without editing provider forms.
 - WordPress mail operation diagnostics. An accepted mail operation does not prove inbox delivery.
 
 Generic HTML submissions are observed browser attempts; provider-confirmed successes are separate evidence. See the [provider support matrix](docs/PROVIDER-SUPPORT.md) for capabilities, tested versions and remaining validation work.
@@ -70,7 +71,7 @@ npm run build
 npm run build:release
 ```
 
-The installable archive is `dist/formhawk-0.3.0.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
+The installable archive is `dist/formhawk-0.4.0.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
 
 ## Project documentation
 
@@ -79,6 +80,7 @@ The installable archive is `dist/formhawk-0.3.0.zip`. Inspect the archive and ru
 - [Provider support](docs/PROVIDER-SUPPORT.md)
 - [Database migrations](docs/MIGRATIONS.md)
 - [Ingestion limits, evidence semantics and hardening](docs/HARDENING.md)
+- [Autopilot CRO architecture, statistics and safety](docs/AUTOPILOT-CRO.md)
 - [Free roadmap](docs/ROADMAP-FREE.md)
 - [Pro roadmap](docs/ROADMAP-PRO.md)
 - [Changelog](readme.txt#changelog)

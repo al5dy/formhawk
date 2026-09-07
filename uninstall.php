@@ -7,6 +7,7 @@ defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 
 wp_clear_scheduled_hook( 'formhawk_daily_cleanup' );
 wp_clear_scheduled_hook( 'formhawk_cleanup_continue' );
+wp_clear_scheduled_hook( 'formhawk_cro_hourly_evaluation' );
 
 $formhawk_settings = get_option( 'formhawk_settings', array() );
 if ( empty( $formhawk_settings['delete_on_uninstall'] ) ) {
@@ -23,6 +24,11 @@ $formhawk_tables = array(
 	$wpdb->prefix . 'formhawk_placement_daily',
 	$wpdb->prefix . 'formhawk_ingestion_budgets',
 	$wpdb->prefix . 'formhawk_dimensions',
+	$wpdb->prefix . 'formhawk_cro_forms',
+	$wpdb->prefix . 'formhawk_experiments',
+	$wpdb->prefix . 'formhawk_variants',
+	$wpdb->prefix . 'formhawk_experiment_daily',
+	$wpdb->prefix . 'formhawk_optimization_history',
 );
 
 foreach ( $formhawk_tables as $formhawk_table ) {

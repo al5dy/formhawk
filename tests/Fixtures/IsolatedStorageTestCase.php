@@ -16,7 +16,7 @@ abstract class IsolatedStorageTestCase extends TestCase {
 		$this->storage_prefix  = $wpdb->prefix;
 		$this->storage_version = get_option( 'formhawk_db_version', '' );
 		$wpdb->prefix          = $wpdb->prefix . 'fh_case_' . strtolower( wp_generate_password( 8, false, false ) ) . '_';
-		$this->storage_tables  = array( Database::forms_table(), Database::daily_table(), Database::fields_table(), Database::placements_table(), Database::placement_daily_table(), Database::budgets_table(), Database::dimensions_table() );
+		$this->storage_tables  = array( Database::forms_table(), Database::daily_table(), Database::fields_table(), Database::placements_table(), Database::placement_daily_table(), Database::budgets_table(), Database::dimensions_table(), Database::cro_forms_table(), Database::experiments_table(), Database::variants_table(), Database::experiment_daily_table(), Database::optimization_history_table() );
 		Database::install();
 		$this->assertTrue( Database::schema_is_current() );
 	}

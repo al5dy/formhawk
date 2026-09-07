@@ -1,0 +1,12 @@
+html.formhawk-cro-pending .wpcf7 form,
+html.formhawk-cro-pending form.wpforms-form,
+html.formhawk-cro-pending form.elementor-form,
+html.formhawk-cro-pending form[data-formhawk-id]{visibility:hidden}
+.formhawk-cro-more{margin-block:1rem}.formhawk-cro-more>summary{cursor:pointer;font-weight:600}
+.formhawk-cro-progress{margin-block:0 1rem;font-size:.875rem;font-weight:700}
+.formhawk-cro-step-nav{display:flex;gap:.75rem;justify-content:space-between;margin-block:1rem}
+.formhawk-cro-steps [hidden],form[data-formhawk-cro-applied] button[hidden]{display:none}
+.formhawk-labels-above label{display:block;margin-block-end:.35rem}
+.formhawk-labels-inline label{display:inline-flex;align-items:center;gap:.5rem}
+.formhawk-placeholders-deemphasize input::placeholder,.formhawk-placeholders-deemphasize textarea::placeholder{opacity:.55}
+@media(prefers-reduced-motion:reduce){.formhawk-cro-steps *{scroll-behavior:auto!important;transition:none!important}}

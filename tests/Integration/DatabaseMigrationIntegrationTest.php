@@ -25,6 +25,11 @@ final class DatabaseMigrationIntegrationTest extends TestCase {
 			Database::forms_table(),
 			Database::budgets_table(),
 			Database::dimensions_table(),
+			Database::cro_forms_table(),
+			Database::experiments_table(),
+			Database::variants_table(),
+			Database::experiment_daily_table(),
+			Database::optimization_history_table(),
 		);
 	}
 
@@ -101,7 +106,7 @@ final class DatabaseMigrationIntegrationTest extends TestCase {
 		update_option( 'formhawk_db_version', '1', false );
 		Database::maybe_upgrade();
 
-		$this->assertSame( '4', (string) get_option( 'formhawk_db_version', '' ) );
+		$this->assertSame( '5', (string) get_option( 'formhawk_db_version', '' ) );
 		$this->assertTrue( Database::tables_exist() );
 		$this->assertTrue( Database::schema_is_current() );
 

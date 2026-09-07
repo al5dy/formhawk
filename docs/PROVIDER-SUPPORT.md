@@ -9,6 +9,22 @@
 | Elementor Pro Forms | document/post ID + form widget ID | Yes | `elementor_pro/forms/new_record` after actions, with a successful handler outcome | `elementor_pro/forms/validation` handler error keys | action errors visible through handler errors, messages and `is_success` | `elementor_pro/forms/mail_sent`, confirmed only with an overall successful outcome | Yes | Same form lifecycle |
 | Standard HTML | explicit ID/name or deterministic structural ID, placement-scoped | Yes | Not universally available | Browser constraint validation | Not universally available | Global `wp_mail` only | Yes | Same DOM form lifecycle |
 
+## Autopilot CRO capability matrix
+
+| Capability | Contact Form 7 | WPForms | Elementor Pro Forms | Standard HTML |
+|---|---:|---:|---:|---:|
+| CTA presentation | Yes | Yes | Yes | Yes |
+| Field order | Runtime safety proof required | Runtime safety proof required | Runtime safety proof required | Runtime safety proof required |
+| Progressive disclosure | Runtime safety proof required | Runtime safety proof required | Runtime safety proof required | Runtime safety proof required |
+| Multi-step | Runtime safety proof required | Runtime safety proof required | Runtime safety proof required | Conditional/runtime safety proof required |
+| Primary result | Provider-confirmed conversion | Provider-confirmed conversion | Provider-confirmed conversion | Observed submit rate |
+
+All structural mutations use provider-native field identities where available and
+fail closed for conditional, required, security, legal, payment, CAPTCHA, upload
+or ambiguous fields. The signed attribution marker is removed before provider
+entry/mail/CRM processing. Full architecture and test boundaries are documented
+in [AUTOPILOT-CRO.md](AUTOPILOT-CRO.md).
+
 Provider identifiers are namespaced by the Formhawk form key, so the same numeric provider ID cannot collide across Contact Form 7, WPForms and Elementor.
 
 ## Event semantics and deduplication
@@ -52,19 +68,28 @@ Labels are captured on discovery and use only the label's own text nodes; nested
 - WPCS/PHPCompatibility, PHPStan, ESLint and reproducible JS/CSS builds passed. Tracker size: 10,892 bytes minified, 4,216 bytes gzip in this environment.
 - Official Plugin Check passed without findings on the unpacked release ZIP. Packaging excludes hidden development configuration and browser/test artifacts; three narrowly scoped SQL-scanner false positives have inline explanations for prepared, allowlisted dynamic placeholder queries.
 - The 109,500-row migration benchmark completed in approximately 8.43 seconds across bounded invocations; an idempotent repeat took approximately 0.007 seconds. Historical counters were preserved. These local timings are not hosting guarantees.
-- This run inspected installed CF7/WPForms public source and exercised adapter contract tests. It did not repeat live CF7/WPForms/Elementor form-submission E2E; WPForms Pro, full Elementor Pro browser E2E and multisite remain outside this run's coverage.
+- This hardening run inspected installed CF7/WPForms public source and exercised adapter contract tests. Its original scope did not repeat provider submissions; the subsequent 0.4.0 Autopilot browser run below did repeat CF7 and WPForms Lite. WPForms Pro, full Elementor Pro browser E2E and multisite remain outside current coverage.
 
-## Remaining full-browser Elementor Pro checklist
+## Autopilot CRO browser verification on 2026-09-07
 
-When a browser-enabled environment and a disposable licensed Elementor Pro test site are available:
+- The final automated matrix passed 96 PHPUnit tests / 1,015 assertions on both PHP 8.2 + WordPress 7.1 and the supported floor PHP 7.4.33 + WordPress 6.4. It also passed 55 Vitest tests, PHPCS/PHPCompatibility, PHPStan, ESLint, strict Composer validation and a byte-identical repeat asset build.
+- Chromium exercised the built 0.4.0 runtime against Contact Form 7 6.1.7 and WPForms Lite 2.0.1.1 in a disposable WordPress site. Deterministic assignment was enabled only by `WP_DEBUG` plus the server-side `FORMHAWK_CRO_TEST_MODE` constant.
+- CF7 control and variant sent the same five business fields through the real REST provider endpoint. Field-order and CTA variants changed presentation only; both provider successes were attributed to their signed arm. A real `validation_failed` response incremented provider validation and latency, then remained eligible for abandonment.
+- WPForms control and two-step variant sent the same rendered business field IDs through the real AJAX endpoint and both reached provider-confirmed success. The multi-step layer retained the provider submit button and WPForms received unchanged business values/keys. Field-order, progressive-disclosure and CTA variants were also applied against its real rendered markup. Its jQuery success lifecycle produced the expected CRO latency sample.
+- A test-only earliest provider observer confirmed `_formhawk_cro` was absent from `$_POST` and from parsed CF7/WPForms provider data before mail/entry processing. The observer retained keys/booleans only, never submitted values.
+- Generic control/progressive variants retained identical business fields and receive no hidden experiment marker. Their browser submit updated observed attempts with zero confirmed conversions. Native invalid increased client validation while the attempt counter stayed unchanged.
+- Elementor Free 3.35.7 plus licensed Elementor Pro 3.35.1 were then installed in the disposable site. Real control and accessible two-step variant submissions both returned HTTP 200 and reached Elementor's `new_record` lifecycle. All six fixed synthetic business values and keys matched inside the real `Form_Record`; the technical marker was absent from `$_POST` and the record, while the confirmed success reached the correct arm. Field-order, progressive-disclosure and CTA variants were also applied to actual rendered Pro markup. Empty required fields retained focus on step one, incremented one client-validation failure and did not increment submit attempts. A second instance of the actual rendered form inserted into a dialog was independently mutated once with one marker.
+- Dynamic duplicate instances, mobile assignment/segment attribution, back/forward restoration, one marker per confirmed-provider form, keyboard step navigation, corrupt-config rollback, missing/late-JS watchdog, and a page without CRO assets were exercised. SPA path reassignment and transient-config retry are additionally covered in Vitest.
+- SPA reassignment requires the CRO runtime to have been enqueued on the initial document. Transitions from a page with no known active placement require the SPA/theme integration to enqueue it or refresh; Formhawk deliberately does not impose the CRO bundle on every frontend page.
+- The final active-page CRO payload measured 17,414 bytes JavaScript and 939 bytes CSS before gzip (6,365 bytes and 429 bytes gzip) in this environment; a page without an active experiment loaded neither asset. Measured layout shift was approximately 0.000068. These local figures are not hosting/theme guarantees.
+- Elementor's rendered telephone pattern in this tested version is rejected by current Chromium's `v`-mode regular-expression parser in both control and variant. Formhawk catches the Constraint Validation API exception during step navigation; the provider itself still logs the same pattern error on final submission in both arms. Both arms nevertheless returned provider-confirmed success. This is recorded as provider-version evidence, not hidden as an Autopilot regression.
 
-1. Create a form with text, email, checkbox, upload and multi-step fields.
-2. Add Email and a non-email Action After Submit.
-3. Verify a view, start and unique field interactions.
-4. Submit invalid data and verify one validation failure with field keys.
-5. Submit valid data and verify one submit attempt plus one confirmed submission/success.
-6. Verify Email action success is separate and does not duplicate the submission.
-7. Remove the Email action and verify the form can still confirm successfully.
-8. Open the form in an Elementor Popup twice and verify no duplicate view for the same popup lifecycle.
-9. Insert multiple widgets, including identical names, and verify their document/widget identities remain distinct.
-10. Inspect the REST request body and database aggregates for absence of submitted values and upload filenames.
+## Remaining licensed-provider expansion checklist
+
+The base licensed Elementor Pro control/variant lifecycle is now exercised. A broader release matrix should still add:
+
+1. Elementor's native Popup module lifecycle in addition to dynamic insertion of real Pro markup.
+2. A configured CAPTCHA service with real test credentials; forbidden-field fail-closed behavior is already automated without transmitting a CAPTCHA payload.
+3. Upload, signature and third-party conditional-field add-ons across their supported version matrix; these controls currently fail closed from structural mutation.
+4. Elementor Email plus multiple non-email Actions After Submit against external sandbox services. The real local no-action success lifecycle and action/mail contract objects are covered, but no external CRM is contacted by this test suite.
+5. WPForms Pro-only features. WPForms Lite exercises the shared public submission lifecycle, but the Pro package is not installed.

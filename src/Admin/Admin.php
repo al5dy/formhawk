@@ -6,6 +6,13 @@ use Formhawk\Analytics\AnalyticsRepository;
 use Formhawk\Analytics\FormRepository;
 use Formhawk\Analytics\HealthEvaluator;
 use Formhawk\Analytics\EvidenceMetrics;
+use Formhawk\CRO\AutopilotManager;
+use Formhawk\CRO\CacheCoordinator;
+use Formhawk\CRO\ExperimentRepository;
+use Formhawk\CRO\Experiments\ExperimentStatus;
+use Formhawk\CRO\FormOptimizationScore;
+use Formhawk\CRO\ProviderCROCapabilities;
+use Formhawk\CRO\WinnerSelector;
 use Formhawk\Domain\ProviderCatalog;
 use Formhawk\Infrastructure\IngestionDiagnostics;
 use Formhawk\Infrastructure\Activator;
@@ -16,11 +23,13 @@ final class Admin {
 	private $forms;
 	private $analytics;
 	private $integrations;
+	private $experiments;
 
-	public function __construct( FormRepository $forms, IntegrationRegistry $integrations = null ) {
+	public function __construct( FormRepository $forms, IntegrationRegistry $integrations = null, ExperimentRepository $experiments = null ) {
 		$this->forms        = $forms;
 		$this->analytics    = new AnalyticsRepository();
 		$this->integrations = $integrations;
+		$this->experiments  = $experiments ? $experiments : new ExperimentRepository();
 	}
 
 	public function register() {
@@ -28,6 +37,7 @@ final class Admin {
 		add_action( 'admin_enqueue_scripts', array( $this, 'assets' ) );
 		add_action( 'admin_post_formhawk_save_settings', array( $this, 'save_settings' ) );
 		add_action( 'admin_post_formhawk_test_mail', array( $this, 'test_mail' ) );
+		add_action( 'admin_post_formhawk_autopilot', array( $this, 'autopilot_action' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( FORMHAWK_FILE ), array( $this, 'action_links' ) );
 	}
 
@@ -48,6 +58,7 @@ final class Admin {
 			return;
 		}
 		wp_enqueue_style( 'formhawk-admin', FORMHAWK_URL . 'assets/css/admin.css', array(), FORMHAWK_VERSION );
+		wp_enqueue_style( 'formhawk-admin-cro', FORMHAWK_URL . 'assets/css/admin-cro.css', array( 'formhawk-admin' ), FORMHAWK_VERSION );
 	}
 
 	public function action_links( $links ) {
@@ -136,6 +147,166 @@ final class Admin {
 		);
 		wp_safe_redirect( admin_url( 'admin.php?page=formhawk&tab=diagnostics' ) );
 		exit;
+	}
+
+	public function autopilot_action() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission to perform this action.', 'formhawk' ) );
+		}
+		check_admin_referer( 'formhawk_autopilot' );
+		if ( ! Database::cro_schema_is_current() ) {
+			wp_die( esc_html__( 'Autopilot storage is not ready. Check Formhawk Diagnostics and database permissions.', 'formhawk' ) );
+		}
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Raw admin action is type-checked and normalized below.
+		$form_id = isset( $_POST['form_id'] ) ? wp_unslash( $_POST['form_id'] ) : 0;
+		$form_id = is_scalar( $form_id ) ? absint( $form_id ) : 0;
+		$form    = $this->forms->find( $form_id );
+		if ( ! $form ) {
+			wp_die( esc_html__( 'Form not found.', 'formhawk' ) );
+		}
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Raw admin action is allowlisted below.
+		$operation         = isset( $_POST['operation'] ) ? wp_unslash( $_POST['operation'] ) : '';
+		$operation         = is_scalar( $operation ) ? sanitize_key( (string) $operation ) : '';
+		$locked_operations = array( 'start', 'pause', 'stop', 'reject', 'promote', 'rollback', 'disable' );
+		$has_lock          = false;
+		if ( in_array( $operation, $locked_operations, true ) ) {
+			$has_lock = $this->experiments->acquire_lock( $form_id );
+			if ( ! $has_lock ) {
+				$this->set_notice( 'error', __( 'Another Autopilot decision is in progress. No changes were made; try again shortly.', 'formhawk' ) );
+				wp_safe_redirect( admin_url( 'admin.php?page=formhawk&form_id=' . $form_id ) );
+				exit;
+			}
+		}
+		$active            = $this->experiments->active_for_form( $form_id );
+		$message           = __( 'Autopilot settings updated.', 'formhawk' );
+		$purge             = false;
+		$success           = true;
+		$editable_statuses = array( ExperimentStatus::SUGGESTED, ExperimentStatus::AWAITING_APPROVAL, ExperimentStatus::RUNNING, ExperimentStatus::PAUSED_MANUAL );
+
+		if ( in_array( $operation, array( 'enable', 'save' ), true ) ) {
+			// The one-click enable action has no settings fields. Passing synthetic
+			// zeroes would silently replace Balanced defaults with hard minimums.
+			$input   = 'save' === $operation ? $this->autopilot_input() : array();
+			$success = $this->experiments->enable( $form_id, $input );
+			if ( $success ) {
+				( new AutopilotManager( $this->experiments, $this->forms ) )->evaluate_form( $form_id );
+				$message = 'enable' === $operation ? __( 'Autopilot enabled in Approve mode.', 'formhawk' ) : $message;
+			} else {
+				$message = __( 'Autopilot settings could not be saved. The original form remains unchanged.', 'formhawk' );
+			}
+		} elseif ( 'start' === $operation && $active && in_array( $active['status'], array( ExperimentStatus::SUGGESTED, ExperimentStatus::AWAITING_APPROVAL, ExperimentStatus::PAUSED_MANUAL ), true ) ) {
+			$success = $this->experiments->start( $active['id'] );
+			$purge   = $success;
+			$message = $success ? __( 'Experiment started.', 'formhawk' ) : __( 'Experiment could not be started; its safe baseline remains active.', 'formhawk' );
+		} elseif ( 'pause' === $operation && $active && ExperimentStatus::RUNNING === $active['status'] ) {
+			$success = $this->experiments->route_to_control( $active['id'] ) && $this->experiments->set_status( $active['id'], ExperimentStatus::PAUSED_MANUAL );
+			$purge   = true;
+			$message = $success ? __( 'Experiment paused; new views use the safe baseline.', 'formhawk' ) : __( 'Experiment pause could not be persisted. Check Autopilot Diagnostics.', 'formhawk' );
+		} elseif ( 'stop' === $operation && $active && in_array( $active['status'], $editable_statuses, true ) ) {
+			$success = $this->experiments->route_to_control( $active['id'] ) && $this->experiments->set_status( $active['id'], ExperimentStatus::MANUALLY_STOPPED, array( 'ended_at_utc' => current_time( 'mysql', true ) ) );
+			if ( $success ) {
+				$this->record_manual_decision( $form_id, $active, 'manually_stopped' );
+			}
+			$purge   = true;
+			$message = $success ? __( 'Experiment stopped.', 'formhawk' ) : __( 'Experiment could not be stopped cleanly. Check Autopilot Diagnostics.', 'formhawk' );
+		} elseif ( 'reject' === $operation && $active && in_array( $active['status'], $editable_statuses, true ) ) {
+			$success = $this->experiments->route_to_control( $active['id'] ) && $this->experiments->set_status( $active['id'], ExperimentStatus::REJECTED, array( 'ended_at_utc' => current_time( 'mysql', true ) ) );
+			if ( $success ) {
+				$this->record_manual_decision( $form_id, $active, 'manual_reject' );
+				do_action( 'formhawk_cro_variant_rejected', $active['id'], 0, 'manual' );
+			}
+			$purge   = true;
+			$message = $success ? __( 'Variant rejected; baseline restored.', 'formhawk' ) : __( 'Variant rejection could not be persisted. Check Autopilot Diagnostics.', 'formhawk' );
+		} elseif ( 'promote' === $operation && $active && in_array( $active['status'], $editable_statuses, true ) ) {
+			$variants = $this->experiments->variants( $active['id'] );
+			if ( isset( $variants[1]['config']['mutations'] ) && $this->experiments->promote_experiment( $form_id, $active['id'], $variants[1]['id'], $variants[1]['config']['mutations'] ) ) {
+				do_action( 'formhawk_cro_winner_promoted', $active['id'], $variants[1]['id'] );
+				$this->record_manual_decision( $form_id, $active, 'manual_promote', $variants[1]['config']['mutations'] );
+				$purge   = true;
+				$message = __( 'Variant promoted manually and entered regression monitoring.', 'formhawk' );
+			} else {
+				$success = false;
+				$message = __( 'The variant could not be promoted safely. The current baseline was preserved.', 'formhawk' );
+			}
+		} elseif ( 'rollback' === $operation ) {
+			$candidate = $active && ExperimentStatus::PROMOTED_MONITORING === $active['status'] ? $active : $this->experiments->latest_rollback_candidate( $form_id );
+			if ( $candidate && $this->experiments->rollback_experiment( $form_id, $candidate['id'] ) ) {
+				do_action( 'formhawk_cro_rollback', $candidate['id'], $candidate['winner_variant_id'] );
+				$this->record_manual_decision( $form_id, $candidate, 'manual_rollback' );
+				$purge   = true;
+				$message = __( 'Previous validated baseline restored.', 'formhawk' );
+			} else {
+				$success = false;
+				$message = __( 'No validated winner is available to roll back.', 'formhawk' );
+			}
+		} elseif ( 'disable' === $operation ) {
+			$closed = true;
+			if ( $active ) {
+				$closed = $this->experiments->route_to_control( $active['id'] ) && $this->experiments->set_status( $active['id'], ExperimentStatus::MANUALLY_STOPPED, array( 'ended_at_utc' => current_time( 'mysql', true ) ) );
+			}
+			$disabled = $this->experiments->disable( $form_id );
+			$success  = $closed && $disabled;
+			$purge    = true;
+			if ( ! $disabled ) {
+				$message = __( 'Autopilot could not be disabled. Check Autopilot Diagnostics.', 'formhawk' );
+			} elseif ( ! $closed ) {
+				$message = __( 'Autopilot was disabled and the original form is shown, but the experiment audit state could not be finalized.', 'formhawk' );
+			} else {
+				$message = __( 'Autopilot disabled. The original provider form is now shown.', 'formhawk' );
+			}
+		} else {
+			$success = false;
+			$message = __( 'This Autopilot action is not valid for the current experiment state.', 'formhawk' );
+		}
+
+		if ( $purge ) {
+			( new CacheCoordinator() )->purge();
+		}
+		if ( $has_lock ) {
+			$this->experiments->release_lock( $form_id );
+		}
+		$this->set_notice( $success ? 'success' : 'error', $message );
+		wp_safe_redirect( admin_url( 'admin.php?page=formhawk&form_id=' . $form_id ) );
+		exit;
+	}
+
+	private function autopilot_input() {
+		$input = array();
+		foreach ( array( 'mode', 'aggressiveness', 'currency' ) as $key ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- The caller verifies the action nonce; values are type-checked here and allowlisted in the repository.
+			$value         = isset( $_POST[ $key ] ) ? wp_unslash( $_POST[ $key ] ) : '';
+			$input[ $key ] = is_scalar( $value ) ? sanitize_text_field( (string) $value ) : '';
+		}
+		foreach ( array( 'max_experimental_traffic', 'min_duration_days', 'min_conversions' ) as $key ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- The caller verifies the action nonce; numeric settings are bounded by policy.
+			$value         = isset( $_POST[ $key ] ) ? wp_unslash( $_POST[ $key ] ) : 0;
+			$input[ $key ] = is_scalar( $value ) ? absint( $value ) : 0;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- The caller verifies the action nonce; optional lead value is bounded in the repository.
+		$value               = isset( $_POST['lead_value'] ) ? wp_unslash( $_POST['lead_value'] ) : '';
+		$input['lead_value'] = is_scalar( $value ) ? (string) $value : '';
+		return $input;
+	}
+
+	private function record_manual_decision( $form_id, array $experiment, $decision, array $resulting_baseline = null ) {
+		$settings = $this->experiments->settings( $form_id );
+		if ( ! $settings ) {
+			return;
+		}
+		$previous  = in_array( $decision, array( 'manual_promote', 'manual_rollback' ), true ) ? $settings['previous_baseline'] : $settings['baseline'];
+		$resulting = null === $resulting_baseline ? $settings['baseline'] : $resulting_baseline;
+		$this->experiments->add_history(
+			array(
+				'form_id'            => $form_id,
+				'experiment_id'      => $experiment['id'],
+				'decision'           => $decision,
+				'previous_baseline'  => $previous,
+				'resulting_baseline' => $resulting,
+				'algorithm_version'  => $experiment['algorithm_version'],
+				'policy_version'     => $experiment['policy_version'],
+				'reason'             => 'manual_admin_override',
+			)
+		);
 	}
 
 	private function render_overview() {
@@ -285,6 +456,7 @@ final class Admin {
 
 			<p class="fh-note"><?php esc_html_e( 'Conversion is an aggregate ratio, not a linked visitor funnel. N/A means unavailable evidence, no denominator, or more outcomes than recorded starts. Browser validation friction is shown as reports, not a failure rate: native validation can block submission before a submit event exists.', 'formhawk' ); ?></p>
 			<p class="fh-note"><?php esc_html_e( 'Validation rejection share = provider validation rejections / (provider validation rejections + accepted submissions), measured since the evidence upgrade. Other provider failures and unknown outcomes are excluded.', 'formhawk' ); ?></p>
+			<?php $this->render_autopilot( $form, $current, $fields ); ?>
 			<details><summary><?php esc_html_e( 'Historical counters (legacy evidence)', 'formhawk' ); ?></summary>
 				<p><?php esc_html_e( 'These frozen counters predate evidence separation and are excluded from current conversion and validation calculations.', 'formhawk' ); ?></p>
 				<dl class="fh-kv"><div><dt><?php esc_html_e( 'Legacy submissions (mixed evidence)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $current['submissions'] ) ); ?></dd></div>
@@ -374,11 +546,15 @@ final class Admin {
 
 	private function render_diagnostics() {
 		$mail   = get_option( 'formhawk_mail_health', array() );
+		$cro    = $this->experiments->diagnostics();
 		$checks = array(
-			array( __( 'Analytics database', 'formhawk' ), Database::tables_exist() && Database::schema_is_current() && Database::ingestion_ready(), __( 'Schema and structural migration are complete. If this check fails, ingestion pauses and the upgrade resumes on subsequent requests.', 'formhawk' ) ),
+			array( __( 'Analytics database', 'formhawk' ), Database::core_schema_is_current() && Database::ingestion_ready(), __( 'Core evidence schema and structural migration are complete.', 'formhawk' ) ),
+			array( __( 'Autopilot database', 'formhawk' ), ! empty( $cro['schema_ready'] ), __( 'Autopilot aggregate schema is ready. A failed optional CRO migration does not stop core analytics or provider forms.', 'formhawk' ) ),
 			array( __( 'Frontend tracker', 'formhawk' ), is_readable( FORMHAWK_DIR . 'assets/js/tracker.js' ), __( 'Tracker asset is readable.', 'formhawk' ) ),
 			array( __( 'REST ingestion', 'formhawk' ), function_exists( 'register_rest_route' ), __( 'WordPress REST API support is available.', 'formhawk' ) ),
 			array( __( 'Data cleanup', 'formhawk' ), (bool) wp_next_scheduled( Activator::CRON_HOOK ), __( 'Daily retention cleanup is scheduled.', 'formhawk' ) ),
+			array( __( 'Autopilot runtime', 'formhawk' ), is_readable( FORMHAWK_DIR . 'assets/js/cro-autopilot.js' ) && is_readable( FORMHAWK_DIR . 'assets/css/cro.css' ), __( 'Runtime Variant Engine assets are readable.', 'formhawk' ) ),
+			array( __( 'Autopilot evaluator', 'formhawk' ), (bool) wp_next_scheduled( AutopilotManager::CRON_HOOK ), __( 'Race-safe hourly statistical evaluation is scheduled.', 'formhawk' ) ),
 		);
 		if ( $this->integrations ) {
 			foreach ( $this->integrations->all() as $provider => $integration ) {
@@ -388,6 +564,145 @@ final class Admin {
 				$checks[] = array( $integration->label(), $integration->is_available(), __( 'Provider lifecycle integration is active.', 'formhawk' ), true );
 			}
 		}
+		$this->render_diagnostics_output( $mail, $cro, $checks );
+	}
+
+	private function render_autopilot( array $form, array $stats, array $fields ) {
+		if ( ! Database::cro_schema_is_current() ) {
+			?>
+			<section class="fh-card fh-autopilot"><div class="fh-cro-empty"><h2><?php esc_html_e( 'Autopilot CRO unavailable', 'formhawk' ); ?></h2><p><?php esc_html_e( 'The optional Autopilot database migration has not completed. The original form and core analytics continue normally; check database permissions and Diagnostics.', 'formhawk' ); ?></p></div></section>
+			<?php
+			return;
+		}
+		$settings           = $this->experiments->settings( $form['id'] );
+		$experiment         = $settings ? $this->experiments->active_for_form( $form['id'] ) : null;
+		$history            = $settings ? $this->experiments->history( $form['id'], 100 ) : array();
+		$rollback_candidate = $settings ? $this->experiments->latest_rollback_candidate( $form['id'] ) : null;
+		$score              = ( new FormOptimizationScore() )->calculate( $stats, $fields, $form['provider'] );
+		$variants           = $experiment ? $this->experiments->variants( $experiment['id'] ) : array();
+		$totals             = $experiment ? $this->experiments->aggregate( $experiment['id'] ) : array();
+		$analysis           = null;
+		if ( count( $variants ) === 2 ) {
+			$control  = $totals[ $variants[0]['id'] ] ?? array();
+			$variant  = $totals[ $variants[1]['id'] ] ?? array();
+			$metric   = 'confirmed_conversion' === $experiment['primary_metric'] ? 'confirmed_successes' : 'observed_submits';
+			$analysis = ( new WinnerSelector() )->select(
+				array(
+					'views'       => $control['views'] ?? 0,
+					'conversions' => $control[ $metric ] ?? 0,
+				),
+				array(
+					'views'       => $variant['views'] ?? 0,
+					'conversions' => $variant[ $metric ] ?? 0,
+				),
+				$experiment['policy'],
+				0
+			);
+		}
+		$cumulative   = 1.0;
+		$winners      = 0;
+		$rejected     = 0;
+		$inconclusive = 0;
+		$decided      = array();
+		$rolled_back  = array();
+		foreach ( $history as $record ) {
+			$decided[ absint( $record['experiment_id'] ) ] = true;
+			if ( in_array( $record['decision'], array( 'rollback', 'manual_rollback' ), true ) ) {
+				$rolled_back[ absint( $record['experiment_id'] ) ] = true;
+			}
+		}
+		foreach ( $history as $record ) {
+			if ( 'winner' === $record['decision'] && null !== $record['lift'] && empty( $rolled_back[ absint( $record['experiment_id'] ) ] ) ) {
+				$cumulative *= 1 + (float) $record['lift'];
+				++$winners;
+			} elseif ( in_array( $record['decision'], array( 'reject', 'stopped_guardrail', 'manual_reject' ), true ) ) {
+				++$rejected;
+			} elseif ( 'inconclusive' === $record['decision'] ) {
+				++$inconclusive;
+			}
+		}
+		$cumulative_lift = max( -1, $cumulative - 1 );
+		$outcomes        = ProviderCatalog::has_server_success( $form['provider'] ) ? absint( $stats['confirmed_successes'] ?? 0 ) : absint( $stats['submit_attempts'] ?? 0 );
+		$additional      = $cumulative > 1 ? max( 0, round( $outcomes - $outcomes / $cumulative ) ) : 0;
+		$estimated_value = ProviderCatalog::has_server_success( $form['provider'] ) && $settings && $settings['lead_value'] ? $additional * (float) $settings['lead_value'] : null;
+		$display_state   = $experiment ? $experiment['status'] : ( $settings ? $settings['state'] : __( 'OFF', 'formhawk' ) );
+		?>
+		<section class="fh-card fh-autopilot" aria-labelledby="formhawk-autopilot-title">
+			<div class="fh-autopilot-head">
+				<div><span class="fh-eyebrow"><?php esc_html_e( 'AUTOPILOT CRO', 'formhawk' ); ?></span><h2 id="formhawk-autopilot-title"><?php esc_html_e( 'Self-Optimizing Forms', 'formhawk' ); ?></h2><p><?php esc_html_e( 'Turn it on. Formhawk continuously improves your form with reversible runtime changes.', 'formhawk' ); ?></p></div>
+				<span class="fh-autopilot-state"><?php echo esc_html( strtoupper( $display_state ) ); ?></span>
+			</div>
+			<div class="fh-cro-score">
+				<div><strong><?php echo esc_html( $score['score'] ); ?></strong><span>/ 100</span><small><?php esc_html_e( 'Form Optimization Score', 'formhawk' ); ?></small></div>
+				<dl><div><dt><?php echo esc_html( ProviderCatalog::has_server_success( $form['provider'] ) ? __( 'Confirmed conversion', 'formhawk' ) : __( 'Observed submit rate', 'formhawk' ) ); ?></dt><dd><?php echo esc_html( $score['conversion'] ); ?></dd></div><div><dt><?php esc_html_e( 'Field friction', 'formhawk' ); ?></dt><dd><?php echo esc_html( $score['field_friction'] ); ?></dd></div><div><dt><?php esc_html_e( 'Validation', 'formhawk' ); ?></dt><dd><?php echo esc_html( $score['validation'] ); ?></dd></div><div><dt><?php esc_html_e( 'Completion', 'formhawk' ); ?></dt><dd><?php echo esc_html( $score['completion'] ); ?></dd></div><div><dt><?php esc_html_e( 'Confidence', 'formhawk' ); ?></dt><dd><?php echo esc_html( ucfirst( $score['confidence'] ) ); ?></dd></div></dl>
+			</div>
+			<?php if ( ! $settings ) : ?>
+				<div class="fh-cro-empty"><h3><?php esc_html_e( 'Safe by default', 'formhawk' ); ?></h3><p><?php esc_html_e( 'Autopilot starts in Approve mode. It never edits the provider form and will wait for enough traffic before proposing an experiment.', 'formhawk' ); ?></p>
+				<?php $this->autopilot_button( $form['id'], 'enable', __( 'Enable Autopilot', 'formhawk' ), 'button button-primary button-hero' ); ?></div>
+			<?php else : ?>
+				<?php if ( $experiment && in_array( $experiment['status'], array( ExperimentStatus::SUGGESTED, ExperimentStatus::AWAITING_APPROVAL, ExperimentStatus::RUNNING ), true ) && ! empty( $experiment['policy']['opportunity'] ) ) : ?>
+					<?php $opportunity = $experiment['policy']['opportunity']; ?>
+					<div class="fh-cro-opportunity"><span class="fh-eyebrow"><?php esc_html_e( 'NEXT OPPORTUNITY', 'formhawk' ); ?></span><h3><?php echo esc_html( $experiment['hypothesis'] ); ?></h3><p><?php echo esc_html( sprintf( /* translators: 1: impact score, 2: confidence score, 3: risk score, 4: sample size. */ __( 'Impact %1$d/100 · Confidence %2$d/100 · Risk %3$d/100 · Evidence sample %4$d', 'formhawk' ), absint( $opportunity['impact_score'] ?? 0 ), absint( $opportunity['confidence_score'] ?? 0 ), absint( $opportunity['risk_score'] ?? 0 ), absint( $opportunity['sample_size'] ?? 0 ) ) ); ?></p><strong><?php echo esc_html( 'running' === $experiment['status'] ? __( 'Running automatically', 'formhawk' ) : ( 'suggested' === $experiment['status'] ? __( 'Observation only', 'formhawk' ) : __( 'Scheduled — awaiting approval', 'formhawk' ) ) ); ?></strong></div>
+				<?php endif; ?>
+				<div class="fh-cro-impact"><div><strong><?php echo esc_html( (string) number_format_i18n( 100 * $cumulative_lift, 1 ) . '%' ); ?></strong><span><?php esc_html_e( 'Cumulative measured improvement', 'formhawk' ); ?></span></div><div><strong><?php echo esc_html( (string) count( $decided ) ); ?></strong><span><?php esc_html_e( 'Experiments decided', 'formhawk' ); ?></span></div><div><strong><?php echo esc_html( (string) $winners ); ?></strong><span><?php esc_html_e( 'Winning optimizations', 'formhawk' ); ?></span></div><div><strong><?php echo esc_html( (string) $rejected ); ?></strong><span><?php esc_html_e( 'Rejected variants', 'formhawk' ); ?></span></div><div><strong><?php echo esc_html( (string) $inconclusive ); ?></strong><span><?php esc_html_e( 'Inconclusive', 'formhawk' ); ?></span></div><div><strong><?php echo esc_html( (string) $additional ); ?></strong><span><?php echo esc_html( ProviderCatalog::has_server_success( $form['provider'] ) ? __( 'Estimated additional conversions', 'formhawk' ) : __( 'Estimated additional observed submits', 'formhawk' ) ); ?></span></div>
+				<?php
+				if ( null !== $estimated_value ) :
+					?>
+					<div><strong><?php echo esc_html( $settings['currency'] . ' ' . number_format_i18n( $estimated_value, 2 ) ); ?></strong><span><?php esc_html_e( 'Estimated additional value', 'formhawk' ); ?></span></div><?php endif; ?></div>
+				<?php if ( $experiment ) : ?>
+					<div class="fh-cro-current"><span class="fh-eyebrow"><?php esc_html_e( 'CURRENT EXPERIMENT', 'formhawk' ); ?></span><h3><?php echo esc_html( $experiment['hypothesis'] ); ?></h3><p><?php echo esc_html( 'confirmed_conversion' === $experiment['primary_metric'] ? __( 'Primary metric: provider-confirmed conversion.', 'formhawk' ) : __( 'Primary metric: observed submit rate; confirmed conversion is not available for generic HTML.', 'formhawk' ) ); ?></p>
+					<?php if ( $analysis && count( $variants ) === 2 ) : ?>
+						<div class="fh-cro-compare"><div><span><?php esc_html_e( 'Control', 'formhawk' ); ?></span><strong><?php echo esc_html( number_format_i18n( 100 * $analysis['control_rate'], 1 ) . '%' ); ?></strong><small><?php echo esc_html( sprintf( /* translators: 1: views, 2: conversions, 3: traffic percentage. */ __( '%1$d views · %2$d conversions · %3$d%% traffic', 'formhawk' ), absint( $totals[ $variants[0]['id'] ]['views'] ?? 0 ), absint( $totals[ $variants[0]['id'] ][ $metric ] ?? 0 ), absint( $variants[0]['traffic_weight'] ) ) ); ?></small></div><div><span><?php esc_html_e( 'Variant', 'formhawk' ); ?></span><strong><?php echo esc_html( number_format_i18n( 100 * $analysis['variant_rate'], 1 ) . '%' ); ?></strong><small><?php echo esc_html( sprintf( /* translators: 1: views, 2: conversions, 3: traffic percentage. */ __( '%1$d views · %2$d conversions · %3$d%% traffic', 'formhawk' ), absint( $totals[ $variants[1]['id'] ]['views'] ?? 0 ), absint( $totals[ $variants[1]['id'] ][ $metric ] ?? 0 ), absint( $variants[1]['traffic_weight'] ) ) ); ?></small></div><div><span><?php esc_html_e( 'Probability better', 'formhawk' ); ?></span><strong><?php echo esc_html( number_format_i18n( 100 * $analysis['probability_to_be_best'], 1 ) . '%' ); ?></strong><small><?php echo esc_html( strtoupper( str_replace( '_', ' ', $analysis['decision'] ) ) . ' · ' . __( 'Beta-Binomial posterior', 'formhawk' ) ); ?></small></div></div>
+					<?php endif; ?>
+					<?php if ( in_array( $experiment['status'], array( ExperimentStatus::SUGGESTED, ExperimentStatus::AWAITING_APPROVAL, ExperimentStatus::RUNNING, ExperimentStatus::PAUSED_MANUAL ), true ) ) : ?>
+					<div class="fh-cro-actions">
+						<?php
+						if ( in_array( $experiment['status'], array( ExperimentStatus::AWAITING_APPROVAL, ExperimentStatus::SUGGESTED, ExperimentStatus::PAUSED_MANUAL ), true ) ) {
+							$this->autopilot_button( $form['id'], 'start', __( 'Start experiment', 'formhawk' ), 'button button-primary' ); }
+						?>
+						<?php
+						if ( ExperimentStatus::RUNNING === $experiment['status'] ) {
+							$this->autopilot_button( $form['id'], 'pause', __( 'Pause experiment', 'formhawk' ) ); }
+						?>
+						<?php $this->autopilot_button( $form['id'], 'reject', __( 'Reject variant', 'formhawk' ) ); ?>
+						<?php $this->autopilot_button( $form['id'], 'promote', __( 'Promote variant', 'formhawk' ) ); ?>
+						<?php $this->autopilot_button( $form['id'], 'stop', __( 'Stop experiment', 'formhawk' ) ); ?>
+					</div>
+					<?php endif; ?></div>
+					<?php
+				else :
+					?>
+					<div class="fh-cro-empty"><h3><?php esc_html_e( 'Collecting data', 'formhawk' ); ?></h3><p><?php esc_html_e( 'Formhawk needs more traffic before Autopilot can safely optimize this form.', 'formhawk' ); ?></p></div><?php endif; ?>
+				<details class="fh-cro-settings"><summary><?php esc_html_e( 'Autopilot mode and safety budget', 'formhawk' ); ?></summary>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><input type="hidden" name="action" value="formhawk_autopilot"><input type="hidden" name="operation" value="save"><input type="hidden" name="form_id" value="<?php echo esc_attr( (string) $form['id'] ); ?>"><?php wp_nonce_field( 'formhawk_autopilot' ); ?>
+				<div class="fh-cro-settings-grid"><label><?php esc_html_e( 'Mode', 'formhawk' ); ?><select name="mode"><option value="observe" <?php selected( $settings['mode'], 'observe' ); ?>><?php esc_html_e( 'Observe', 'formhawk' ); ?></option><option value="approve" <?php selected( $settings['mode'], 'approve' ); ?>><?php esc_html_e( 'Approve', 'formhawk' ); ?></option><option value="full" <?php selected( $settings['mode'], 'full' ); ?>><?php esc_html_e( 'Full Autopilot', 'formhawk' ); ?></option></select></label><label><?php esc_html_e( 'Aggressiveness', 'formhawk' ); ?><select name="aggressiveness"><option value="conservative" <?php selected( $settings['aggressiveness'], 'conservative' ); ?>><?php esc_html_e( 'Conservative', 'formhawk' ); ?></option><option value="balanced" <?php selected( $settings['aggressiveness'], 'balanced' ); ?>><?php esc_html_e( 'Balanced', 'formhawk' ); ?></option><option value="aggressive" <?php selected( $settings['aggressiveness'], 'aggressive' ); ?>><?php esc_html_e( 'Aggressive', 'formhawk' ); ?></option></select></label><label><?php esc_html_e( 'Maximum experimental traffic (%)', 'formhawk' ); ?><input type="number" min="10" max="50" name="max_experimental_traffic" value="<?php echo esc_attr( (string) $settings['max_experimental_traffic'] ); ?>"></label><label><?php esc_html_e( 'Minimum duration (days)', 'formhawk' ); ?><input type="number" min="3" max="60" name="min_duration_days" value="<?php echo esc_attr( (string) $settings['min_duration_days'] ); ?>"></label><label><?php esc_html_e( 'Minimum conversions', 'formhawk' ); ?><input type="number" min="20" max="10000" name="min_conversions" value="<?php echo esc_attr( (string) $settings['min_conversions'] ); ?>"></label><label><?php esc_html_e( 'Average lead value', 'formhawk' ); ?><input type="number" min="0" step="0.01" name="lead_value" value="<?php echo esc_attr( null === $settings['lead_value'] ? '' : $settings['lead_value'] ); ?>"></label><input type="hidden" name="currency" value="<?php echo esc_attr( $settings['currency'] ); ?>"></div><?php submit_button( __( 'Save Autopilot settings', 'formhawk' ), 'secondary', 'submit', false ); ?></form></details>
+				<div class="fh-cro-actions">
+				<?php
+				if ( $rollback_candidate ) {
+					$this->autopilot_button( $form['id'], 'rollback', __( 'Rollback winner', 'formhawk' ) ); }
+				?>
+				<?php $this->autopilot_button( $form['id'], 'disable', __( 'Disable Autopilot', 'formhawk' ), 'button button-link-delete' ); ?></div>
+				<?php
+				if ( $history ) :
+					?>
+					<h3><?php esc_html_e( 'Optimization History', 'formhawk' ); ?></h3><div class="fh-table-card"><table class="widefat striped"><thead><tr><th><?php esc_html_e( 'Experiment', 'formhawk' ); ?></th><th><?php esc_html_e( 'Decision', 'formhawk' ); ?></th><th><?php esc_html_e( 'Lift', 'formhawk' ); ?></th><th><?php esc_html_e( 'Evidence', 'formhawk' ); ?></th><th><?php esc_html_e( 'Date', 'formhawk' ); ?></th></tr></thead><tbody>
+					<?php
+					foreach ( $history as $record ) :
+						?>
+					<tr><td>#<?php echo esc_html( $record['experiment_id'] ); ?></td><td><?php echo esc_html( strtoupper( str_replace( '_', ' ', $record['decision'] ) ) ); ?></td><td><?php echo esc_html( null === $record['lift'] ? '—' : number_format_i18n( 100 * (float) $record['lift'], 1 ) . '%' ); ?></td><td><?php echo esc_html( $record['algorithm_version'] . ' · ' . $record['policy_version'] ); ?></td><td><?php echo esc_html( $record['created_at_utc'] ); ?> UTC</td></tr><?php endforeach; ?></tbody></table></div><?php endif; ?>
+			<?php endif; ?>
+			<p class="fh-note"><?php esc_html_e( 'No form values, IP addresses, cookies, browser storage or persistent visitor identifiers are used. Assignment lasts only for the current page lifecycle. The original provider form remains the source of truth.', 'formhawk' ); ?></p>
+		</section>
+		<?php
+	}
+
+	private function autopilot_button( $form_id, $operation, $label, $button_class = 'button' ) {
+		?>
+		<form class="fh-inline-form" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><input type="hidden" name="action" value="formhawk_autopilot"><input type="hidden" name="operation" value="<?php echo esc_attr( $operation ); ?>"><input type="hidden" name="form_id" value="<?php echo esc_attr( (string) $form_id ); ?>"><?php wp_nonce_field( 'formhawk_autopilot' ); ?><button type="submit" class="<?php echo esc_attr( $button_class ); ?>"><?php echo esc_html( $label ); ?></button></form>
+		<?php
+	}
+
+	private function render_diagnostics_output( array $mail, array $cro, array $checks ) {
 		?>
 		<div class="fh-toolbar"><div><h2><?php esc_html_e( 'Diagnostics', 'formhawk' ); ?></h2><p><?php esc_html_e( 'Fast checks for the Formhawk runtime and WordPress mail layer.', 'formhawk' ); ?></p></div></div>
 		<div class="fh-checks">
@@ -399,6 +714,17 @@ final class Admin {
 		<?php endforeach; ?>
 		</div>
 
+		<div class="fh-card">
+			<h2><?php esc_html_e( 'Autopilot Diagnostics', 'formhawk' ); ?></h2>
+			<dl class="fh-kv"><div><dt><?php esc_html_e( 'Active experiments', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['active_experiments'] ) ); ?></dd></div><div><dt><?php esc_html_e( 'Last statistical evaluation', 'formhawk' ); ?></dt><dd><?php echo esc_html( $cro['last_evaluated_at_utc'] ? $cro['last_evaluated_at_utc'] . ' UTC' : __( 'Not run yet', 'formhawk' ) ); ?></dd></div><div><dt><?php esc_html_e( 'Assigned views (7 days)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['assigned_views'] ) ); ?></dd></div><div><dt><?php esc_html_e( 'Variant application errors (7 days)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['application_errors'] ) ); ?></dd></div><div><dt><?php esc_html_e( 'Attempts without provider outcome (7 days)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['missing_confirmations'] ) ); ?></dd></div><div><dt><?php esc_html_e( 'Guardrail triggers', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['guardrail_triggers'] ) ); ?></dd></div><div><dt><?php esc_html_e( 'Orphan experiments', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['orphan_experiments'] ) ); ?></dd></div><div><dt><?php esc_html_e( 'Rejected CRO config requests (today)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['rejected_config_requests'] ) ); ?></dd></div><div><dt><?php esc_html_e( 'Rejected CRO event requests (today)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['rejected_event_requests'] ) ); ?></dd></div><div><dt><?php esc_html_e( 'Throttled CRO requests (today)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['throttled_config_requests'] + $cro['throttled_event_requests'] ) ); ?></dd></div><div><dt><?php esc_html_e( 'CRO storage failures (today)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $cro['storage_failures'] ) ); ?></dd></div></dl>
+			<h3><?php esc_html_e( 'Provider CRO capability matrix', 'formhawk' ); ?></h3>
+			<table class="widefat striped"><thead><tr><th><?php esc_html_e( 'Provider', 'formhawk' ); ?></th><th><?php esc_html_e( 'CTA', 'formhawk' ); ?></th><th><?php esc_html_e( 'Order', 'formhawk' ); ?></th><th><?php esc_html_e( 'Progressive', 'formhawk' ); ?></th><th><?php esc_html_e( 'Multi-step', 'formhawk' ); ?></th><th><?php esc_html_e( 'Confirmed success', 'formhawk' ); ?></th></tr></thead><tbody>
+			<?php
+			foreach ( ProviderCROCapabilities::matrix() as $provider => $capability ) :
+				?>
+				<tr><th scope="row"><?php echo esc_html( $this->provider_label( $provider ) ); ?></th><td>✓</td><td>✓*</td><td>✓*</td><td>✓*</td><td><?php echo ! empty( $capability['confirmed_success'] ) ? '✓' : esc_html__( 'N/A — observed only', 'formhawk' ); ?></td></tr><?php endforeach; ?>
+			</tbody></table><p class="fh-note"><?php esc_html_e( '* Structural mutations run only after the runtime safety classifier confirms independent fields and no conditional, legal, security, payment, CAPTCHA or file controls.', 'formhawk' ); ?></p>
+		</div>
 		<div class="fh-card">
 			<h2><?php esc_html_e( 'Ingestion diagnostics (today, UTC)', 'formhawk' ); ?></h2>
 			<p><?php esc_html_e( 'Site-wide aggregate counters. No IP addresses, request payloads or visitor identifiers are retained. Event counts cover bounded, parseable batches, including throttled requests. Oversized or unparseable bodies are counted as requests only.', 'formhawk' ); ?></p>

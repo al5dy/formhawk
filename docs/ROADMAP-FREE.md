@@ -1,7 +1,7 @@
 # Formhawk Free — Product & Engineering Roadmap
 
 **Document status:** Living roadmap containing future work only  
-**Code baseline reviewed:** Formhawk 0.3.0  
+**Code baseline reviewed:** Formhawk 0.4.0  
 **Review date:** 2026-09-07  
 **Target:** a trustworthy Formhawk Free 1.0 distributed through WordPress.org  
 **Product boundary:** a complete, privacy-first, local form analytics and health product for one WordPress installation
@@ -843,7 +843,18 @@ Exit gate: generic and CF7 metrics can be compared without semantic ambiguity or
 
 Exit gate: minimum/current platform CI, licensed-provider compatibility runs where packages are available, and a verified release artifact.
 
-## 0.4.0 — Reach II
+## 0.4.0 — Autopilot CRO (shipped)
+
+- aggregate opportunity detection and deterministic hypotheses;
+- reversible runtime mutation engine;
+- provider-confirmed experiment attribution for CF7, WPForms and Elementor Pro Forms;
+- Beta-Binomial sequential decisions, guardrails, transactional promotion and rollback;
+- Observe, Approve and Full Autopilot modes;
+- optimization score, history, diagnostics and cache-neutral page-lifecycle assignment.
+
+Exit gate: the complete opportunity → assignment → provider evidence → decision → promoted baseline loop works without writing provider form definitions or collecting visitor payloads.
+
+## Next — Reach II
 
 - Fluent Forms;
 - Forminator;

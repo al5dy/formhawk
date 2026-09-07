@@ -3,6 +3,7 @@
 namespace Formhawk\Infrastructure;
 
 use Formhawk\Infrastructure\Migrations\Version4;
+use Formhawk\Infrastructure\Migrations\Version5;
 
 final class Database {
 	public static function dimension_lock_name() {
@@ -10,7 +11,9 @@ final class Database {
 	}
 
 	public static function ingestion_ready() {
-		return version_compare( (string) get_option( 'formhawk_db_version', '' ), FORMHAWK_DB_VERSION, '>=' );
+		// Version 4 is the evidence/cardinality contract required by core analytics.
+		// A later optional CRO DDL failure must not take normal form analytics down.
+		return version_compare( (string) get_option( 'formhawk_db_version', '' ), '4', '>=' );
 	}
 
 	public static function budgets_table() {
@@ -48,10 +51,35 @@ final class Database {
 		return $wpdb->prefix . 'formhawk_placement_daily';
 	}
 
+	public static function cro_forms_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_cro_forms';
+	}
+
+	public static function experiments_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_experiments';
+	}
+
+	public static function variants_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_variants';
+	}
+
+	public static function experiment_daily_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_experiment_daily';
+	}
+
+	public static function optimization_history_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_optimization_history';
+	}
+
 	public static function install() {
 		self::install_core_schema();
 		self::install_placement_schema();
-		$migrated = Version4::run();
+		$migrated = Version4::run() && Version5::run();
 
 		if ( $migrated && self::tables_exist() && self::schema_is_current() ) {
 			update_option( 'formhawk_db_version', FORMHAWK_DB_VERSION, false );
@@ -91,6 +119,10 @@ final class Database {
 		}
 		if ( version_compare( $installed_version, '4', '<' ) && Version4::run() ) {
 			update_option( 'formhawk_db_version', '4', false );
+			$installed_version = '4';
+		}
+		if ( version_compare( $installed_version, '4', '>=' ) && version_compare( $installed_version, '5', '<' ) && Version5::run() ) {
+			update_option( 'formhawk_db_version', '5', false );
 		}
 	}
 
@@ -212,7 +244,7 @@ final class Database {
 
 	public static function tables_exist() {
 		global $wpdb;
-		foreach ( array( self::forms_table(), self::daily_table(), self::fields_table(), self::placements_table(), self::placement_daily_table(), self::budgets_table(), self::dimensions_table() ) as $table ) {
+		foreach ( array( self::forms_table(), self::daily_table(), self::fields_table(), self::placements_table(), self::placement_daily_table(), self::budgets_table(), self::dimensions_table(), self::cro_forms_table(), self::experiments_table(), self::variants_table(), self::experiment_daily_table(), self::optimization_history_table() ) as $table ) {
 			$like = is_callable( array( $wpdb, 'esc_like' ) ) ? $wpdb->esc_like( $table ) : $table;
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- Runtime schema diagnostic for Formhawk-owned tables.
 			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $like ) );
@@ -237,7 +269,15 @@ final class Database {
 	}
 
 	public static function schema_is_current() {
+		return self::core_schema_is_current() && self::cro_schema_is_current( true );
+	}
+
+	public static function core_schema_is_current() {
 		return self::schema_is_version_2() && self::placement_schema_is_current() && Version4::is_current();
+	}
+
+	public static function cro_schema_is_current( $verify = false ) {
+		return $verify ? Version5::is_current() : version_compare( (string) get_option( 'formhawk_db_version', '' ), '5', '>=' );
 	}
 
 	private static function schema_is_version_2() {

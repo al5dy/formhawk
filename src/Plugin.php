@@ -5,6 +5,12 @@ namespace Formhawk;
 use Formhawk\Admin\Admin;
 use Formhawk\Analytics\EventIngestor;
 use Formhawk\Analytics\FormRepository;
+use Formhawk\CRO\Attribution\AttributingEventRecorder;
+use Formhawk\CRO\Attribution\RequestContext;
+use Formhawk\CRO\AutopilotManager;
+use Formhawk\CRO\ExperimentRepository;
+use Formhawk\CRO\Http\CROConfigController;
+use Formhawk\CRO\Http\CROEventsController;
 use Formhawk\Http\EventsController;
 use Formhawk\Infrastructure\Cleanup;
 use Formhawk\Infrastructure\Database;
@@ -39,23 +45,82 @@ final class Plugin {
 
 		$forms    = new FormRepository();
 		$ingestor = new EventIngestor( $forms );
-		$registry = new IntegrationRegistry(
+		$cro      = new ExperimentRepository();
+		$context  = new RequestContext();
+		$context->register();
+		$provider_events = new AttributingEventRecorder( $ingestor, $context, $cro );
+		$registry        = new IntegrationRegistry(
 			array(
-				new ContactForm7( $ingestor ),
-				new WPForms( $ingestor ),
-				new ElementorForms( $ingestor ),
+				new ContactForm7( $provider_events ),
+				new WPForms( $provider_events ),
+				new ElementorForms( $provider_events ),
 				new GenericForm(),
 			)
 		);
 
 		( new EventsController( $ingestor ) )->register();
+		if ( Database::cro_schema_is_current() ) {
+			( new CROConfigController( $cro ) )->register();
+			( new CROEventsController( $cro ) )->register();
+			( new AutopilotManager( $cro, $forms ) )->register();
+		}
 		$registry->register();
 		( new MailMonitor() )->register();
 		( new Cleanup() )->register();
 		( new Privacy() )->register();
-		( new Admin( $forms, $registry ) )->register();
+		( new Admin( $forms, $registry, $cro ) )->register();
 
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_tracker' ) );
+		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_cro' ), 20 );
+	}
+
+	public function enqueue_cro() {
+		if ( is_admin() || is_feed() || is_robots() || ! Database::cro_schema_is_current() || apply_filters( 'formhawk_cro_disabled', false ) ) {
+			return;
+		}
+		$path = self::current_path();
+		if ( ! ( new ExperimentRepository() )->has_runtime_on_path( $path ) ) {
+			return;
+		}
+
+		wp_enqueue_style( 'formhawk-cro', FORMHAWK_URL . 'assets/css/cro.css', array(), FORMHAWK_VERSION );
+		wp_enqueue_script(
+			'formhawk-cro',
+			FORMHAWK_URL . 'assets/js/cro-autopilot.js',
+			array(),
+			FORMHAWK_VERSION,
+			array(
+				'in_footer' => false,
+				'strategy'  => 'defer',
+			)
+		);
+		$test_mode = defined( 'WP_DEBUG' ) && WP_DEBUG && defined( 'FORMHAWK_CRO_TEST_MODE' ) && FORMHAWK_CRO_TEST_MODE;
+		$force     = '';
+		if ( $test_mode ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Development-only deterministic assignment switch, disabled unless two server constants opt in.
+			$raw_force = isset( $_GET['formhawk_cro_variant'] ) ? wp_unslash( $_GET['formhawk_cro_variant'] ) : '';
+			$force     = is_scalar( $raw_force ) && in_array( $raw_force, array( 'control', 'variant' ), true ) ? (string) $raw_force : '';
+		}
+		$config = array(
+			'configEndpoint' => esc_url_raw( rest_url( 'formhawk/v1/cro/config' ) ),
+			'eventsEndpoint' => esc_url_raw( rest_url( 'formhawk/v1/cro/events' ) ),
+			'path'           => $path,
+			'debug'          => (bool) ( defined( 'WP_DEBUG' ) && WP_DEBUG ),
+			'testMode'       => $test_mode,
+			'force'          => $force,
+			'strings'        => array(
+				'more'     => __( 'Add additional information', 'formhawk' ),
+				'progress' => __( 'Form progress', 'formhawk' ),
+				'step'     => __( 'Step', 'formhawk' ),
+				'back'     => __( 'Back', 'formhawk' ),
+				'next'     => __( 'Next', 'formhawk' ),
+			),
+		);
+		wp_add_inline_script(
+			'formhawk-cro',
+			'document.documentElement.classList.add("formhawk-cro-pending");window.setTimeout(function(){document.documentElement.classList.remove("formhawk-cro-pending");},1200);window.FormhawkCROConfig=' . wp_json_encode( $config ) . ';',
+			'before'
+		);
 	}
 
 	public function enqueue_tracker() {

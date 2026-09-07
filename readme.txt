@@ -4,11 +4,11 @@ Tags: form analytics, contact form 7, wpforms, elementor forms, form abandonment
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.3.0
+Stable tag: 0.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Find where visitors abandon Contact Form 7, WPForms, Elementor Pro and standard HTML forms — privately, with no cookies or external analytics.
+Privacy-first form analytics and Autopilot CRO with confirmed conversions — without cookies or external tracking.
 
 == Description ==
 
@@ -170,6 +170,33 @@ There is:
 Formhawk automatically discovers supported frontend forms and starts collecting aggregate analytics when visitors interact with them.
 
 Open **Formhawk** in your WordPress dashboard to see the results.
+
+= Autopilot CRO — self-optimizing forms =
+
+Enable Autopilot once. Formhawk uses existing aggregate analytics to find a
+high-confidence opportunity, creates one reversible runtime variant, measures it,
+protects the form with guardrails, promotes a credible winner and monitors it for
+regression before continuing.
+
+Autopilot is not a manual A/B-test builder. Its standard loop is automatic:
+
+**Observe → find friction → create hypothesis → experiment → measure → protect → promote or reject → continue.**
+
+Safety remains the first constraint:
+
+* The original CF7, WPForms or Elementor form definition is never rewritten.
+* Required, conditional, legal, consent, payment, password, CAPTCHA, security and upload fields fail closed from structural experiments.
+* Contact Form 7, WPForms and Elementor winners use provider-confirmed conversions.
+* Generic HTML uses clearly labelled observed submit rate, not fake confirmation.
+* Low-traffic experiments remain collecting; minimum sample, conversions and runtime all apply.
+* Harmful variants return new traffic to control automatically.
+* Promoted winners are monitored and can be rolled back automatically.
+* Assignment exists only for the current page lifecycle, with no cookie or browser storage.
+
+Choose Observe, Approve or Full Autopilot mode. Approve is the safe default. The
+form detail screen explains the opportunity, live result, evidence, optimization
+history and compounded measured impact. Optional average lead value enables a
+transparent additional-value estimate.
 
 = Privacy-first form analytics =
 
@@ -534,6 +561,20 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 
 == Changelog ==
 
+= 0.4.0 =
+
+* Added Formhawk Autopilot CRO: an autonomous opportunity, hypothesis, safe runtime experiment, decision, promotion, monitoring and next-optimization loop.
+* Added reversible field-order, progressive-disclosure, accessible multi-step, CTA, label and placeholder mutation strategies without editing provider form definitions.
+* Added privacy-safe signed experiment attribution through CF7, WPForms and Elementor provider-confirmed outcomes; Generic remains observed-only.
+* Added Bayesian Beta-Binomial sequential decisions with sample, conversion, runtime, expected-loss, minimum-effect and posterior-probability gates.
+* Added global and desktop/mobile guardrails for confirmed-conversion harm, provider/mail failures, separate provider/client validation, JS application errors and latency.
+* Added transactional automatic promotion, post-promotion regression rollback, immutable versioned history and per-form race-safe hourly evaluation.
+* Added Observe, Approve and Full Autopilot modes, real optimization budgets, deterministic CRO score, opportunity explanations, diagnostics and optional lead-value estimates.
+* Added normalized migration v5 and aggregate-only experiment tables without fabricating historical assignment evidence.
+* Added cache-neutral page-lifecycle assignment, conditional asset loading, dynamic/AJAX form handling and WP Rocket/LiteSpeed invalidation hooks.
+* Added strict bounded CRO REST schemas, atomic site-wide budgets and fixed diagnostic counters without IP or visitor identifiers.
+* Added statistical, guardrail, migration, attribution, REST abuse, runtime mutation, accessibility and failure-safety tests.
+
 = 0.3.0 =
 
 * Hardened public ingestion with strict JSON/event schemas, bounded nesting and metadata, atomic request/event/cost limits, and site/per-form dimension budgets.
@@ -544,9 +585,6 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 * Fixed empty WPForms error collections being counted as validation failures.
 * Hardened label extraction against nested control contents and later personalized labels; retained native form behavior and optional API fallbacks.
 * Expanded abuse, concurrency, migration, evidence and tracker privacy regression coverage. Build instructions, defaults and recovery details are in docs/HARDENING.md.
-
-= 0.2.0 =
-
 * Added first-class WPForms Lite and Pro discovery, stable identity, server-confirmed success and validation analytics.
 * Added first-class Elementor Pro Forms discovery, stable document/widget identity, validation, post-action outcome checks and separate Email-action signals.
 * Added provider registry and capability contracts for future form integrations.
@@ -556,15 +594,9 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 * Added dynamic/popup lifecycle deduplication, compound field normalization and privacy regression coverage.
 * Added bounded dashboard pagination and restart-safe chunked retention cleanup for large sites.
 * Added reproducible JS/CSS build, PHPUnit, Vitest, ESLint, PHPStan and WPCS tooling.
-
-= 0.1.1 =
-
 * Hardened SQL preparation for aggregate counter upserts.
 * Updated WordPress compatibility metadata for WordPress 7.1.
 * Resolved Plugin Check release-blocking issues.
-
-= 0.1.0 =
-
 * Initial public MVP release.
 * Added Contact Form 7 and standard HTML form discovery.
 * Added views, starts, interactions, submissions and abandonment analytics.
@@ -576,20 +608,6 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 * Added local aggregate storage, retention cleanup and privacy controls.
 * Added dynamic form discovery and developer extension hooks.
 
-== Upgrade Notice ==
-
-= 0.3.0 =
-
-Evidence-aware metrics and public ingestion hardening. Existing analytics are preserved. Large structural migrations resume in bounded batches; analytics pauses until the upgrade completes. Legacy mixed counters remain visible separately. Review docs/HARDENING.md when tuning limits for large sites.
-
-= 0.2.0 =
-
-Adds first-class WPForms and Elementor Pro Forms analytics. The aggregate-only database schema upgrades automatically and preserves existing Contact Form 7 and standard HTML analytics.
-
 = 0.1.1 =
 
-Plugin Check hardening and WordPress 7.1 compatibility metadata.
-
-= 0.1.0 =
-
-Initial public release of Formhawk.
+* Initial public release of Formhawk.
