@@ -7,6 +7,18 @@ use Formhawk\Tests\Fixtures\RecordingEventRecorder;
 use PHPUnit\Framework\TestCase;
 
 final class WPFormsIntegrationTest extends TestCase {
+	public function test_empty_or_other_form_errors_do_not_invent_a_validation_rejection() {
+		$events      = new RecordingEventRecorder();
+		$integration = new WPForms( $events );
+		foreach ( array( array(), array( 55 => array() ), array( 99 => array( 4 => 'Private error' ) ) ) as $errors ) {
+			$this->assertSame( $errors, $integration->initial_errors( $errors, $this->form_data() ) );
+		}
+		$this->assertCount( 0, $events->events );
+		$integration->process_complete( array(), array(), $this->form_data(), 0 );
+		$this->assertCount( 1, $events->events );
+		$this->assertSame( 'success', $events->events[0]['type'] );
+	}
+
 	private function form_data() {
 		return array(
 			'id'       => 55,

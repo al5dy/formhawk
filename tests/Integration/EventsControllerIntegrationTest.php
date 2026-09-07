@@ -7,9 +7,9 @@ use Formhawk\Analytics\FormRepository;
 use Formhawk\Domain\FormIdentity;
 use Formhawk\Http\EventsController;
 use Formhawk\Infrastructure\Database;
-use PHPUnit\Framework\TestCase;
+use Formhawk\Tests\Fixtures\IsolatedStorageTestCase;
 
-final class EventsControllerIntegrationTest extends TestCase {
+final class EventsControllerIntegrationTest extends IsolatedStorageTestCase {
 	public function test_cross_origin_request_is_rejected() {
 		$controller = new EventsController( new EventIngestor( new FormRepository() ) );
 		$request    = $this->request(
@@ -51,14 +51,21 @@ final class EventsControllerIntegrationTest extends TestCase {
 			$this->request(
 				array(
 					'token'  => $legacy_token,
-					'events' => array( array( 'type' => 'unsupported' ) ),
+					'events' => array(
+						array(
+							'type'             => 'form_view',
+							'provider'         => 'html',
+							'provider_form_id' => 'cached',
+							'page_path'        => '/cached',
+						),
+					),
 				),
 				home_url( '/' )
 			)
 		);
 
 		$this->assertInstanceOf( '\\WP_REST_Response', $response );
-		$this->assertSame( 0, $response->get_data()['accepted'] );
+		$this->assertSame( 1, $response->get_data()['accepted'] );
 	}
 
 	public function test_public_client_cannot_forge_server_confirmed_success() {
@@ -82,8 +89,8 @@ final class EventsControllerIntegrationTest extends TestCase {
 		);
 
 		$response = $controller->ingest( $request );
-		$this->assertInstanceOf( '\\WP_REST_Response', $response );
-		$this->assertSame( 0, $response->get_data()['accepted'] );
+		$this->assertWPError( $response );
+		$this->assertSame( 'formhawk_schema', $response->get_error_code() );
 		$key = FormIdentity::key( 'wpforms', $provider_form_id, '/forged' );
 		$this->assertNull(
 			$wpdb->get_var(
@@ -132,8 +139,10 @@ final class EventsControllerIntegrationTest extends TestCase {
 			'token'  => EventsController::public_token(),
 			'events' => array(
 				array(
-					'type'     => 'form_success',
-					'provider' => 'wpforms',
+					'type'             => 'form_view',
+					'provider'         => 'html',
+					'provider_form_id' => 'rate-test',
+					'page_path'        => '/rate-test',
 				),
 			),
 		);

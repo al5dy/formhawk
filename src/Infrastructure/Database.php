@@ -2,7 +2,27 @@
 
 namespace Formhawk\Infrastructure;
 
+use Formhawk\Infrastructure\Migrations\Version4;
+
 final class Database {
+	public static function dimension_lock_name() {
+		return 'formhawk_' . hash( 'sha1', constant( 'DB_NAME' ) . '|' . self::dimensions_table() );
+	}
+
+	public static function ingestion_ready() {
+		return version_compare( (string) get_option( 'formhawk_db_version', '' ), FORMHAWK_DB_VERSION, '>=' );
+	}
+
+	public static function budgets_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_ingestion_budgets';
+	}
+
+	public static function dimensions_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_dimensions';
+	}
+
 	public static function forms_table() {
 		global $wpdb;
 		return $wpdb->prefix . 'formhawk_forms';
@@ -31,8 +51,9 @@ final class Database {
 	public static function install() {
 		self::install_core_schema();
 		self::install_placement_schema();
+		$migrated = Version4::run();
 
-		if ( self::tables_exist() && self::schema_is_current() ) {
+		if ( $migrated && self::tables_exist() && self::schema_is_current() ) {
 			update_option( 'formhawk_db_version', FORMHAWK_DB_VERSION, false );
 		}
 	}
@@ -67,6 +88,9 @@ final class Database {
 				return;
 			}
 			update_option( 'formhawk_db_version', '3', false );
+		}
+		if ( version_compare( $installed_version, '4', '<' ) && Version4::run() ) {
+			update_option( 'formhawk_db_version', '4', false );
 		}
 	}
 
@@ -188,7 +212,7 @@ final class Database {
 
 	public static function tables_exist() {
 		global $wpdb;
-		foreach ( array( self::forms_table(), self::daily_table(), self::fields_table(), self::placements_table(), self::placement_daily_table() ) as $table ) {
+		foreach ( array( self::forms_table(), self::daily_table(), self::fields_table(), self::placements_table(), self::placement_daily_table(), self::budgets_table(), self::dimensions_table() ) as $table ) {
 			$like = is_callable( array( $wpdb, 'esc_like' ) ) ? $wpdb->esc_like( $table ) : $table;
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- Runtime schema diagnostic for Formhawk-owned tables.
 			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $like ) );
@@ -213,7 +237,7 @@ final class Database {
 	}
 
 	public static function schema_is_current() {
-		return self::schema_is_version_2() && self::placement_schema_is_current();
+		return self::schema_is_version_2() && self::placement_schema_is_current() && Version4::is_current();
 	}
 
 	private static function schema_is_version_2() {

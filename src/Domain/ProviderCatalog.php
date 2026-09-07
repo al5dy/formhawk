@@ -30,7 +30,19 @@ final class ProviderCatalog {
 		return self::GENERIC === $provider;
 	}
 
+	public static function server_success_ids() {
+		return array( self::CF7, self::WPFORMS, self::ELEMENTOR );
+	}
+
 	public static function has_server_success( $provider ) {
+		return in_array( $provider, self::server_success_ids(), true );
+	}
+
+	public static function has_server_validation( $provider ) {
 		return in_array( $provider, array( self::CF7, self::WPFORMS, self::ELEMENTOR ), true );
+	}
+
+	public static function has_server_failure( $provider ) {
+		return in_array( $provider, array( self::CF7, self::ELEMENTOR ), true );
 	}
 }

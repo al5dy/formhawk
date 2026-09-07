@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import trackerSource from '../../resources/js/tracker/index.js?raw';
 import {createTracker, detectProvider, eligible, fieldMeta} from '../../resources/js/tracker/index.js';
 
 function form(html) {
@@ -71,6 +72,15 @@ describe('provider detection', () => {
 });
 
 describe('field normalization', () => {
+	it('keeps forbidden payload and persistence APIs out of production tracker source', () => {
+		expect(trackerSource).not.toMatch(/\.value\b|\bFormData\b|\blocalStorage\b|\bsessionStorage\b|\bindexedDB\b|document\.cookie|preventDefault\s*\(/);
+	});
+	it('never extracts control contents or dynamic descendants from a wrapping label', () => {
+		const element = form('<form><label>Message <textarea name="message">private-message</textarea><output>private-output</output><span contenteditable>private-editable</span></label><label>Topic <select name="topic"><option>private-option</option></select></label></form>');
+		expect(fieldMeta(element.querySelector('textarea'), element)).toEqual({key: 'message', label: 'Message', type: 'textarea'});
+		expect(fieldMeta(element.querySelector('select'), element)).toEqual({key: 'topic', label: 'Topic', type: 'select'});
+		expect(fieldMeta(element.querySelector('[contenteditable]'), element)).toBeNull();
+	});
 	it('normalizes WPForms compound fields without choice values', () => {
 		const element = form('<form class="wpforms-form" data-formid="42"><div class="wpforms-field wpforms-field-name" data-field-id="3"><label class="wpforms-field-label">Full name</label><input name="wpforms[fields][3][first]" type="text"><input name="wpforms[fields][3][last]" type="text"></div></form>');
 		const fields = element.querySelectorAll('input');
@@ -130,6 +140,59 @@ describe('tracker lifecycle, deduplication, and privacy', () => {
 		return instance;
 	}
 
+	it('preserves pending validation evidence when a terminal event arrives before the coalescing task', () => {
+		const element = form('<form id="pending"><input name="email" required></form>');
+		const instance = tracker({endpoint: '/events', token: 'public', path: '/pending'});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		element.querySelector('input').dispatchEvent(new Event('invalid'));
+		element.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+		instance.flush();
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'client_validation_failure')).toHaveLength(1);
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_submit')).toHaveLength(1);
+	});
+
+	it('falls back safely when optional observer constructors throw', () => {
+		window.IntersectionObserver = class { constructor() { throw new Error('Unavailable'); } };
+		const original = window.MutationObserver;
+		window.MutationObserver = class { constructor() { throw new Error('Unavailable'); } };
+		try {
+			form('<form id="fallback"><input name="email"></form>');
+			const instance = tracker({endpoint: '/events', token: 'public'});
+			document.dispatchEvent(new Event('DOMContentLoaded'));
+			instance.flush();
+			expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_view')).toHaveLength(1);
+		} finally {
+			window.MutationObserver = original;
+			delete window.IntersectionObserver;
+		}
+	});
+
+	it('captures new dynamic fields while keeping existing personalized labels out', async () => {
+		const element = form('<form id="dynamic-field"><input name="first"></form>');
+		const instance = tracker({endpoint: '/events', token: 'public'});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		element.insertAdjacentHTML('beforeend', '<label for="new">Static label</label><input id="new" name="new">');
+		await new Promise((resolve) => window.setTimeout(resolve, 1));
+		element.querySelector('label').textContent = 'private-dynamic-text';
+		element.querySelector('#new').dispatchEvent(new Event('input', {bubbles: true}));
+		instance.flush();
+		expect(decodedEvents(fetchMock).find((event) => event.type === 'field_interaction').field.label).toBe('Static label');
+		expect(JSON.stringify(decodedEvents(fetchMock))).not.toContain('private-dynamic-text');
+	});
+
+	it('uses metadata captured before visitor interaction when labels are personalized later', () => {
+		const element = form('<form id="lead"><label for="email">Email</label><input id="email" name="email"></form>');
+		const instance = tracker({endpoint: '/events', token: 'public', path: '/lead'});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		element.querySelector('label').textContent = 'visitor@example.test';
+		const input = element.querySelector('input');
+		Object.defineProperty(input, 'value', {get() { throw new Error('Analytics read a value'); }});
+		input.dispatchEvent(new Event('input', {bubbles: true}));
+		instance.flush();
+		expect(JSON.stringify(decodedEvents(fetchMock))).not.toContain('visitor@example.test');
+		expect(decodedEvents(fetchMock).find((event) => event.type === 'field_interaction').field.label).toBe('Email');
+	});
+
 	it('emits one lifecycle for a generic form and never sends its entered value', () => {
 		const element = form('<form data-formhawk-id="lead"><label for="email">Email</label><input id="email" name="email" type="email"></form>');
 		const input = element.querySelector('input');
@@ -169,9 +232,62 @@ describe('tracker lifecycle, deduplication, and privacy', () => {
 		fields[1].dispatchEvent(new Event('invalid', {bubbles: false, cancelable: true}));
 		await new Promise((resolve) => window.setTimeout(resolve, 1));
 		trackerInstance.flush();
-		const failures = decodedEvents(fetchMock).filter((event) => event.type === 'validation_failure');
+		const failures = decodedEvents(fetchMock).filter((event) => event.type === 'client_validation_failure');
 		expect(failures).toHaveLength(1);
 		expect(failures[0].fields.map((field) => field.key)).toEqual(['email', 'phone']);
+	});
+
+	it('deduplicates native and jQuery friction by lifecycle even after the old debounce window', async () => {
+		installJQueryEventFacade();
+		const element = form('<form class="wpforms-form" data-formid="73"><input name="wpforms[fields][1]" required></form>');
+		const input = element.querySelector('input');
+		const instance = tracker({endpoint: '/events', token: 'public', path: '/native'});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		expect(element.checkValidity()).toBe(false);
+		await new Promise((resolve) => window.setTimeout(resolve, 1));
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000);
+		element.dispatchEvent(new CustomEvent('invalid-form', {bubbles: true, detail: {errorList: [{element: input}]}}));
+		expect(element.checkValidity()).toBe(false);
+		await new Promise((resolve) => window.setTimeout(resolve, 1));
+		instance.flush();
+		const events = decodedEvents(fetchMock);
+		expect(events.filter((event) => event.type === 'client_validation_failure')).toHaveLength(1);
+		expect(events.filter((event) => event.type === 'form_submit')).toHaveLength(0);
+		expect(events.filter((event) => event.type === 'validation_error')).toHaveLength(0);
+		expect(events.some((event) => event.source === 'provider')).toBe(false);
+	});
+
+	it('flushes native validation before pagehide without waiting for a timer', () => {
+		const element = form('<form data-formhawk-id="leave"><input name="email" required></form>');
+		tracker({endpoint: '/events', token: 'public', path: '/leave'});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		element.checkValidity();
+		window.dispatchEvent(new Event('pagehide'));
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'client_validation_failure')).toHaveLength(1);
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_submit')).toHaveLength(0);
+	});
+
+	it('bounds a validation field batch to fifty structural keys', async () => {
+		const element = form('<form data-formhawk-id="large">' + Array.from({length: 80}, (_, index) => '<input name="field-' + index + '" required>').join('') + '</form>');
+		const instance = tracker({endpoint: '/events', token: 'public', path: '/large'});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		element.checkValidity();
+		await new Promise((resolve) => window.setTimeout(resolve, 1));
+		instance.flush();
+		const reports = decodedEvents(fetchMock).filter((event) => event.type === 'client_validation_failure');
+		expect(reports).toHaveLength(1);
+		expect(reports[0].fields).toHaveLength(50);
+	});
+
+	it('does not throw when fetch fails synchronously', () => {
+		window.fetch = () => { throw new Error('Blocked API'); };
+		const element = form('<form data-formhawk-id="blocked"><input name="email"></form>');
+		const instance = tracker({endpoint: '/events', token: 'public', path: '/blocked'});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		expect(() => {
+			element.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+			instance.flush();
+		}).not.toThrow();
 	});
 
 	it('allows abandonment after a provider submit returns validation errors', async () => {
@@ -185,7 +301,7 @@ describe('tracker lifecycle, deduplication, and privacy', () => {
 		await new Promise((resolve) => window.setTimeout(resolve, 1));
 		window.dispatchEvent(new Event('pagehide'));
 		const events = decodedEvents(fetchMock);
-		expect(events.filter((event) => event.type === 'validation_failure')).toHaveLength(1);
+		expect(events.filter((event) => event.type === 'client_validation_failure')).toHaveLength(1);
 		expect(events.filter((event) => event.type === 'form_abandon')).toHaveLength(1);
 	});
 

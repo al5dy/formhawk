@@ -5,6 +5,9 @@ namespace Formhawk\Admin;
 use Formhawk\Analytics\AnalyticsRepository;
 use Formhawk\Analytics\FormRepository;
 use Formhawk\Analytics\HealthEvaluator;
+use Formhawk\Analytics\EvidenceMetrics;
+use Formhawk\Domain\ProviderCatalog;
+use Formhawk\Infrastructure\IngestionDiagnostics;
 use Formhawk\Infrastructure\Activator;
 use Formhawk\Infrastructure\Database;
 use Formhawk\Integrations\IntegrationRegistry;
@@ -142,7 +145,7 @@ final class Admin {
 		$totals   = $this->analytics->overview_totals( $days );
 		$page     = min( $page, max( 1, (int) ceil( $totals['forms'] / $per_page ) ) );
 		$rows     = $this->analytics->overview( $days, $page, $per_page );
-		$rate     = $totals['starts'] > 0 ? ( $totals['submissions'] / $totals['starts'] ) * 100 : 0;
+		$rate     = EvidenceMetrics::ratio( $totals['eligible_confirmed_successes'], $totals['eligible_starts'] );
 		?>
 		<div class="fh-toolbar">
 			<div>
@@ -156,8 +159,10 @@ final class Admin {
 			<?php $this->metric( __( 'Forms tracked', 'formhawk' ), $totals['forms'], __( 'discovered automatically', 'formhawk' ) ); ?>
 			<?php $this->metric( __( 'Views', 'formhawk' ), $totals['views'], __( 'entered the viewport', 'formhawk' ) ); ?>
 			<?php $this->metric( __( 'Started', 'formhawk' ), $totals['starts'], __( 'first interaction', 'formhawk' ) ); ?>
-			<?php $this->metric( __( 'Submitted', 'formhawk' ), $totals['submissions'], __( 'observed submissions', 'formhawk' ) ); ?>
-			<?php $this->metric( __( 'Conversion', 'formhawk' ), number_format_i18n( $rate, 1 ) . '%', __( 'submitted / started', 'formhawk' ) ); ?>
+			<?php $this->metric( __( 'Submit attempts', 'formhawk' ), $totals['submit_attempts'], __( 'browser-observed, all forms', 'formhawk' ) ); ?>
+			<?php $this->metric( __( 'Observed HTML attempts', 'formhawk' ), $totals['observed_generic_attempts'], __( 'backend outcome unknown', 'formhawk' ) ); ?>
+			<?php $this->metric( __( 'Confirmed successes', 'formhawk' ), $totals['eligible_confirmed_successes'], __( 'provider-confirmed', 'formhawk' ) ); ?>
+			<?php $this->metric( __( 'Confirmed conversion', 'formhawk' ), $this->rate_label( $rate ), __( 'confirmed / starts, supported providers only', 'formhawk' ) ); ?>
 		</div>
 
 		<div class="fh-card fh-table-card">
@@ -174,8 +179,9 @@ final class Admin {
 						<th scope="col"><?php esc_html_e( 'Health', 'formhawk' ); ?></th>
 						<th scope="col"><?php esc_html_e( 'Views', 'formhawk' ); ?></th>
 						<th scope="col"><?php esc_html_e( 'Started', 'formhawk' ); ?></th>
-						<th scope="col"><?php esc_html_e( 'Submitted', 'formhawk' ); ?></th>
-						<th scope="col"><?php esc_html_e( 'Conversion', 'formhawk' ); ?></th>
+						<th scope="col"><?php esc_html_e( 'Attempts', 'formhawk' ); ?></th>
+						<th scope="col"><?php esc_html_e( 'Confirmed successes', 'formhawk' ); ?></th>
+						<th scope="col"><?php esc_html_e( 'Confirmed conversion', 'formhawk' ); ?></th>
 						<th scope="col"><?php esc_html_e( 'Abandonment', 'formhawk' ); ?></th>
 						<th scope="col"><?php esc_html_e( 'Last success', 'formhawk' ); ?></th>
 					</tr></thead>
@@ -202,8 +208,9 @@ final class Admin {
 							<td><?php $this->status( $health ); ?></td>
 							<td><?php echo esc_html( number_format_i18n( $row['views'] ) ); ?></td>
 							<td><?php echo esc_html( number_format_i18n( $row['starts'] ) ); ?></td>
-							<td><?php echo esc_html( number_format_i18n( $row['submissions'] ) ); ?></td>
-							<td><strong><?php echo esc_html( number_format_i18n( $conv, 1 ) . '%' ); ?></strong></td>
+							<td><?php echo esc_html( number_format_i18n( $row['submit_attempts'] ) ); ?></td>
+							<td><?php echo esc_html( $this->confirmed_label( $row ) ); ?></td>
+							<td><strong><?php echo esc_html( $this->rate_label( $conv ) ); ?></strong></td>
 							<td><?php echo esc_html( number_format_i18n( $ab, 1 ) . '%' ); ?></td>
 							<td><?php echo esc_html( $this->relative_time( $row['last_success_at'] ) ); ?></td>
 						</tr>
@@ -228,8 +235,8 @@ final class Admin {
 		$placements = $this->analytics->placement_stats( $form_id, $days );
 		$row        = array_merge( $form, $current );
 		$health     = HealthEvaluator::evaluate( $row );
-		$anomaly    = HealthEvaluator::anomaly( $current, $previous );
-		$conv       = HealthEvaluator::conversion_rate( $current );
+		$anomaly    = HealthEvaluator::anomaly( $row, array_merge( $form, $previous ) );
+		$conv       = HealthEvaluator::conversion_rate( $row );
 		$ab         = HealthEvaluator::abandonment_rate( $current );
 		$avg_ms     = ! empty( $current['duration_samples'] ) ? (int) round( $current['duration_total_ms'] / $current['duration_samples'] ) : 0;
 		?>
@@ -258,7 +265,7 @@ final class Admin {
 			<?php if ( $anomaly ) : ?>
 				<?php
 				/* translators: %s: percentage drop in form conversion. */
-				$drop_message = sprintf( __( 'Conversion dropped %s%%.', 'formhawk' ), number_format_i18n( $anomaly['drop'], 0 ) );
+				$drop_message = sprintf( __( 'Confirmed conversion dropped %s%%.', 'formhawk' ), number_format_i18n( $anomaly['drop'], 0 ) );
 				/* translators: 1: current conversion percentage, 2: previous comparable-period conversion percentage. */
 				$period_message = sprintf( __( 'Current period: %1$s%%. Previous comparable period: %2$s%%.', 'formhawk' ), number_format_i18n( $anomaly['current_rate'], 1 ), number_format_i18n( $anomaly['previous_rate'], 1 ) );
 				?>
@@ -269,17 +276,26 @@ final class Admin {
 				<?php $this->metric( __( 'Views', 'formhawk' ), $current['views'], __( 'form viewed', 'formhawk' ) ); ?>
 				<?php $this->metric( __( 'Started', 'formhawk' ), $current['starts'], $this->percent_of( $current['starts'], $current['views'] ) . ' ' . __( 'of views', 'formhawk' ) ); ?>
 				<?php $this->metric( __( 'Submit attempts', 'formhawk' ), $current['submit_attempts'], __( 'browser-observed', 'formhawk' ) ); ?>
-				<?php $this->metric( __( 'Submitted', 'formhawk' ), $current['submissions'], number_format_i18n( $conv, 1 ) . '% ' . __( 'of starts', 'formhawk' ) ); ?>
+				<?php $this->metric( __( 'Confirmed successes', 'formhawk' ), $this->confirmed_label( $row ), __( 'provider-confirmed', 'formhawk' ) ); ?>
+				<?php $this->metric( __( 'Confirmed conversion', 'formhawk' ), $this->rate_label( $conv ), __( 'confirmed / starts', 'formhawk' ) ); ?>
+				<?php $this->metric( __( 'Observed attempt rate', 'formhawk' ), $this->rate_label( EvidenceMetrics::observed_attempt_rate( $row ) ), __( 'browser attempts / starts', 'formhawk' ) ); ?>
 				<?php $this->metric( __( 'Abandoned', 'formhawk' ), $current['abandons'], number_format_i18n( $ab, 1 ) . '% ' . __( 'of starts', 'formhawk' ) ); ?>
 				<?php $this->metric( __( 'Avg. time', 'formhawk' ), $this->duration( $avg_ms ), __( 'started → submit/leave', 'formhawk' ) ); ?>
 			</div>
 
+			<p class="fh-note"><?php esc_html_e( 'Conversion is an aggregate ratio, not a linked visitor funnel. N/A means unavailable evidence, no denominator, or more outcomes than recorded starts. Browser validation friction is shown as reports, not a failure rate: native validation can block submission before a submit event exists.', 'formhawk' ); ?></p>
+			<p class="fh-note"><?php esc_html_e( 'Validation rejection share = provider validation rejections / (provider validation rejections + accepted submissions), measured since the evidence upgrade. Other provider failures and unknown outcomes are excluded.', 'formhawk' ); ?></p>
+			<details><summary><?php esc_html_e( 'Historical counters (legacy evidence)', 'formhawk' ); ?></summary>
+				<p><?php esc_html_e( 'These frozen counters predate evidence separation and are excluded from current conversion and validation calculations.', 'formhawk' ); ?></p>
+				<dl class="fh-kv"><div><dt><?php esc_html_e( 'Legacy submissions (mixed evidence)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $current['submissions'] ) ); ?></dd></div>
+				<div><dt><?php esc_html_e( 'Legacy validation (source unknown)', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $current['validation_failures'] ) ); ?></dd></div></dl>
+			</details>
 			<div class="fh-grid-2">
 				<div class="fh-card">
 					<div class="fh-card-head"><h2><?php esc_html_e( 'Conversion funnel', 'formhawk' ); ?></h2></div>
 					<?php $this->funnel_row( __( 'Viewed', 'formhawk' ), $current['views'], $current['views'] ); ?>
 					<?php $this->funnel_row( __( 'Started', 'formhawk' ), $current['starts'], $current['views'] ); ?>
-					<?php $this->funnel_row( __( 'Submitted', 'formhawk' ), $current['submissions'], $current['views'] ); ?>
+					<?php $this->funnel_row( __( 'Browser submit attempts', 'formhawk' ), $current['submit_attempts'], $current['views'] ); ?>
 				</div>
 				<div class="fh-card">
 					<div class="fh-card-head"><h2><?php esc_html_e( 'Health', 'formhawk' ); ?></h2></div>
@@ -287,13 +303,16 @@ final class Admin {
 					<dl class="fh-kv">
 						<div><dt><?php esc_html_e( 'Last confirmed success', 'formhawk' ); ?></dt><dd><?php echo esc_html( $this->relative_time( $form['last_success_at'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Last failure', 'formhawk' ); ?></dt><dd><?php echo esc_html( $this->relative_time( $form['last_failure_at'] ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Validation failures', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $current['validation_failures'] ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Browser validation friction reports', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $current['client_validation_failures'] ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Provider validation rejections', 'formhawk' ); ?></dt><dd><?php echo esc_html( ProviderCatalog::has_server_success( $form['provider'] ) ? number_format_i18n( $current['provider_validation_failures'] ) : __( 'N/A', 'formhawk' ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Validation rejection share', 'formhawk' ); ?></dt><dd><?php echo esc_html( $this->rate_label( EvidenceMetrics::validation_rate( $row ) ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Provider failures', 'formhawk' ); ?></dt><dd><?php echo esc_html( ProviderCatalog::has_server_failure( $form['provider'] ) ? number_format_i18n( $current['failures'] ) : __( 'N/A', 'formhawk' ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Mail action successes', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $current['mail_successes'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Mail failures', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $current['mail_failures'] ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Confirmed successes', 'formhawk' ); ?></dt><dd><?php echo esc_html( number_format_i18n( $current['confirmed_successes'] ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Confirmed successes', 'formhawk' ); ?></dt><dd><?php echo esc_html( $this->confirmed_label( $row ) ); ?></dd></div>
 					</dl>
 					<?php
-					if ( 'html' === $form['provider'] ) :
+					if ( ! ProviderCatalog::has_server_success( $form['provider'] ) ) :
 						?>
 						<p class="fh-note"><?php esc_html_e( 'Standard HTML forms expose browser submit attempts but have no universal server-side success signal. Supported form plugins use provider-confirmed lifecycle hooks.', 'formhawk' ); ?></p><?php endif; ?>
 				</div>
@@ -309,8 +328,9 @@ final class Admin {
 							<th scope="col"><?php esc_html_e( 'Page path', 'formhawk' ); ?></th>
 							<th scope="col"><?php esc_html_e( 'Views', 'formhawk' ); ?></th>
 							<th scope="col"><?php esc_html_e( 'Started', 'formhawk' ); ?></th>
-							<th scope="col"><?php esc_html_e( 'Submitted', 'formhawk' ); ?></th>
-							<th scope="col"><?php esc_html_e( 'Conversion', 'formhawk' ); ?></th>
+							<th scope="col"><?php esc_html_e( 'Attempts', 'formhawk' ); ?></th>
+							<th scope="col"><?php esc_html_e( 'Confirmed successes', 'formhawk' ); ?></th>
+							<th scope="col"><?php esc_html_e( 'Confirmed conversion', 'formhawk' ); ?></th>
 						</tr></thead>
 						<tbody>
 						<?php foreach ( $placements as $placement ) : ?>
@@ -318,8 +338,9 @@ final class Admin {
 								<td><code><?php echo esc_html( $placement['page_path'] ); ?></code></td>
 								<td><?php echo esc_html( number_format_i18n( $placement['views'] ) ); ?></td>
 								<td><?php echo esc_html( number_format_i18n( $placement['starts'] ) ); ?></td>
-								<td><?php echo esc_html( number_format_i18n( $placement['submissions'] ) ); ?></td>
-								<td><?php echo esc_html( $this->percent_of( $placement['submissions'], $placement['starts'] ) ); ?></td>
+								<td><?php echo esc_html( number_format_i18n( $placement['submit_attempts'] ) ); ?></td>
+								<td><?php echo esc_html( $this->confirmed_label( array_merge( $placement, array( 'provider' => $form['provider'] ) ) ) ); ?></td>
+								<td><?php echo esc_html( $this->rate_label( EvidenceMetrics::confirmed_conversion( array_merge( $placement, array( 'provider' => $form['provider'] ) ) ) ) ); ?></td>
 							</tr>
 						<?php endforeach; ?>
 						</tbody>
@@ -334,6 +355,16 @@ final class Admin {
 				</div>
 				<div class="fh-card">
 					<div class="fh-card-head"><h2><?php esc_html_e( 'Validation friction', 'formhawk' ); ?></h2><span><?php esc_html_e( 'Errors by field', 'formhawk' ); ?></span></div>
+					<h3><?php esc_html_e( 'Browser friction', 'formhawk' ); ?></h3>
+					<?php $this->field_table( $fields, 'client_validation_errors' ); ?>
+					<h3><?php esc_html_e( 'Provider validation', 'formhawk' ); ?></h3>
+					<?php
+					if ( ProviderCatalog::has_server_success( $form['provider'] ) ) {
+						$this->field_table( $fields, 'provider_validation_errors' );
+					} else {
+						echo '<p>' . esc_html__( 'N/A: this form has no provider validation evidence.', 'formhawk' ) . '</p>'; }
+					?>
+					<h3><?php esc_html_e( 'Legacy validation (source unknown)', 'formhawk' ); ?></h3>
 					<?php $this->field_table( $fields, 'validation_errors' ); ?>
 				</div>
 			</div>
@@ -344,7 +375,7 @@ final class Admin {
 	private function render_diagnostics() {
 		$mail   = get_option( 'formhawk_mail_health', array() );
 		$checks = array(
-			array( __( 'Analytics database', 'formhawk' ), Database::tables_exist(), __( 'All Formhawk aggregate tables are present.', 'formhawk' ) ),
+			array( __( 'Analytics database', 'formhawk' ), Database::tables_exist() && Database::schema_is_current() && Database::ingestion_ready(), __( 'Schema and structural migration are complete. If this check fails, ingestion pauses and the upgrade resumes on subsequent requests.', 'formhawk' ) ),
 			array( __( 'Frontend tracker', 'formhawk' ), is_readable( FORMHAWK_DIR . 'assets/js/tracker.js' ), __( 'Tracker asset is readable.', 'formhawk' ) ),
 			array( __( 'REST ingestion', 'formhawk' ), function_exists( 'register_rest_route' ), __( 'WordPress REST API support is available.', 'formhawk' ) ),
 			array( __( 'Data cleanup', 'formhawk' ), (bool) wp_next_scheduled( Activator::CRON_HOOK ), __( 'Daily retention cleanup is scheduled.', 'formhawk' ) ),
@@ -368,6 +399,25 @@ final class Admin {
 		<?php endforeach; ?>
 		</div>
 
+		<div class="fh-card">
+			<h2><?php esc_html_e( 'Ingestion diagnostics (today, UTC)', 'formhawk' ); ?></h2>
+			<p><?php esc_html_e( 'Site-wide aggregate counters. No IP addresses, request payloads or visitor identifiers are retained. Event counts cover bounded, parseable batches, including throttled requests. Oversized or unparseable bodies are counted as requests only.', 'formhawk' ); ?></p>
+			<dl class="fh-kv">
+			<?php
+			$diagnostic_labels = array(
+				'rejected_events'             => __( 'Rejected events', 'formhawk' ),
+				'rejected_requests'           => __( 'Rejected requests', 'formhawk' ),
+				'throttled_events'            => __( 'Throttled events', 'formhawk' ),
+				'throttled_requests'          => __( 'Throttled requests', 'formhawk' ),
+				'cardinality_rejected_events' => __( 'Cardinality-rejected events', 'formhawk' ),
+				'storage_rejected_events'     => __( 'Storage/admission unavailable events', 'formhawk' ),
+			);
+			foreach ( ( new IngestionDiagnostics() )->today() as $key => $value ) :
+				?>
+				<div><dt><?php echo esc_html( $diagnostic_labels[ $key ] ); ?></dt><dd><?php echo esc_html( number_format_i18n( $value ) ); ?></dd></div>
+			<?php endforeach; ?>
+			</dl>
+		</div>
 		<div class="fh-card fh-mail-card">
 			<div><h2><?php esc_html_e( 'WordPress mail health', 'formhawk' ); ?></h2><p><?php esc_html_e( 'Formhawk listens to wp_mail() success/failure hooks globally but never stores recipients, subjects, message bodies or attachments.', 'formhawk' ); ?></p></div>
 			<dl class="fh-kv">
@@ -384,6 +434,14 @@ final class Admin {
 			<p class="fh-note"><?php esc_html_e( 'A successful wp_mail() call means WordPress/PHPMailer accepted the message for sending. It does not prove final inbox delivery.', 'formhawk' ); ?></p>
 		</div>
 		<?php
+	}
+
+	private function rate_label( $rate ) {
+		return null === $rate ? __( 'N/A', 'formhawk' ) : number_format_i18n( $rate, 1 ) . '%';
+	}
+
+	private function confirmed_label( array $row ) {
+		return ProviderCatalog::has_server_success( $row['provider'] ) ? number_format_i18n( $row['confirmed_successes'] ) : __( 'N/A', 'formhawk' );
 	}
 
 	private function render_settings() {

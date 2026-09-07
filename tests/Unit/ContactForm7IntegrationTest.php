@@ -41,4 +41,16 @@ final class ContactForm7IntegrationTest extends TestCase {
 		$this->assertStringNotContainsString( 'visitor@example.test', $encoded );
 		$this->assertStringNotContainsString( 'Synthetic private contents', $encoded );
 	}
+	public function test_repeated_validation_hook_records_one_provider_failure() {
+		$recorder    = new RecordingEventRecorder();
+		$integration = new ContactForm7( $recorder );
+		$form        = new ContactForm7Double( 72, 'Validation' );
+		$result      = array(
+			'status'         => 'validation_failed',
+			'invalid_fields' => array( 'email' => array() ),
+		);
+		$integration->submitted( $form, $result );
+		$integration->submitted( $form, $result );
+		$this->assertCount( 1, $recorder->events );
+	}
 }

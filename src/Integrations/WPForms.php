@@ -86,8 +86,13 @@ final class WPForms implements FormIntegrationInterface {
 
 		$form_errors = isset( $errors[ $metadata['numeric_id'] ] ) && is_array( $errors[ $metadata['numeric_id'] ] )
 			? $errors[ $metadata['numeric_id'] ]
-			: $errors;
-		$fields      = $this->field_metadata( $form_errors, $form_data );
+			: array();
+		// WPForms 2.0.1.1 filters its form-ID-indexed errors even on a valid submission.
+		// An empty collection, or another form's errors, is not rejection evidence.
+		if ( empty( $form_errors ) ) {
+			return;
+		}
+		$fields = $this->field_metadata( $form_errors, $form_data );
 
 		$this->validation_recorded[ $metadata['id'] ] = true;
 		$this->events->record_validation_failure( $this->id(), $metadata['id'], $metadata['title'], $this->submission_path(), $fields );

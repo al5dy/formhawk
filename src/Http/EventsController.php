@@ -3,21 +3,40 @@
 namespace Formhawk\Http;
 
 use Formhawk\Analytics\EventIngestor;
+use Formhawk\Analytics\IngestionLimits;
+use Formhawk\Contracts\BudgetStoreInterface;
+use Formhawk\Infrastructure\AtomicBudgetStore;
+use Formhawk\Infrastructure\IngestionDiagnostics;
+use Formhawk\Integrations\ClientFormIdentityValidator;
 
 final class EventsController {
 	const MAX_BODY_BYTES          = 65536;
-	const MAX_EVENT_BYTES         = 4096;
+	const MAX_EVENT_BYTES         = 16384;
 	const MAX_BATCH_SIZE          = 20;
 	const MAX_REQUESTS_PER_MINUTE = 600;
 
 	private $ingestor;
+	private $budgets;
+	private $diagnostics;
+	private $identities;
 
-	public function __construct( EventIngestor $ingestor ) {
-		$this->ingestor = $ingestor;
+	public function __construct( EventIngestor $ingestor, BudgetStoreInterface $budgets = null, IngestionDiagnostics $diagnostics = null, ClientFormIdentityValidator $identities = null ) {
+		$this->ingestor    = $ingestor;
+		$this->budgets     = $budgets ? $budgets : new AtomicBudgetStore();
+		$this->diagnostics = $diagnostics ? $diagnostics : new IngestionDiagnostics();
+		$this->identities  = $identities ? $identities : new ClientFormIdentityValidator();
 	}
 
 	public function register() {
 		add_action( 'rest_api_init', array( $this, 'routes' ) );
+		add_filter( 'rest_post_dispatch', array( $this, 'retry_header' ), 10, 3 );
+	}
+
+	public function retry_header( $response, $server, $request ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundBeforeLastUsed
+		if ( '/formhawk/v1/events' === $request->get_route() && in_array( $response->get_status(), array( 429, 503 ), true ) ) {
+			$response->header( 'Retry-After', '60' );
+		}
+		return $response;
 	}
 
 	public function routes() {
@@ -27,55 +46,126 @@ final class EventsController {
 			array(
 				'methods'             => \WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'ingest' ),
+				// Deliberately public. Token/origin checks do not authenticate a visitor.
 				'permission_callback' => '__return_true',
+				'args'                => $this->route_args(),
 			)
 		);
 	}
 
+	private function route_args() {
+		$args = ClientEventSchema::payload()['properties'];
+		foreach ( $args as &$arg ) {
+			// Enforce the complete schema in ingest(), so rejections also reach diagnostics.
+			$arg['validate_callback'] = '__return_true';
+			$arg['sanitize_callback'] = null;
+		}
+		return $args;
+	}
+
 	public function ingest( \WP_REST_Request $request ) {
+		global $wpdb;
+		$previous = $wpdb->suppress_errors( true );
+		try {
+			return $this->handle( $request );
+		} finally {
+			$wpdb->suppress_errors( $previous );
+		}
+	}
+
+	private function handle( \WP_REST_Request $request ) {
+		$limits = IngestionLimits::all();
+		$body   = (string) $request->get_body();
+		// Count only bounded, parseable batches, including requests rejected by the first budget.
+		$wire  = strlen( $body ) <= $limits['body_bytes'] ? json_decode( $body, false, 8 ) : null;
+		$count = is_object( $wire ) && isset( $wire->events ) && is_array( $wire->events ) ? min( $limits['batch_size'], count( $wire->events ) ) : 0;
+		if ( ! $this->budgets->reserve( 'requests', 1, $limits['requests_per_minute'], MINUTE_IN_SECONDS ) ) {
+			return $this->reject( 'storage' === $this->budgets->last_failure() ? 'storage' : 'rate_limit', 'storage' === $this->budgets->last_failure() ? 503 : 429, $count );
+		}
 		if ( ! $this->is_same_origin_request( $request ) ) {
-			return new \WP_Error( 'formhawk_origin', __( 'Invalid request origin.', 'formhawk' ), array( 'status' => 403 ) );
+			return $this->reject( 'origin', 403, $count );
 		}
-
-		$content_type = (string) $request->get_header( 'content-type' );
-		if ( false === stripos( $content_type, 'application/json' ) ) {
-			return new \WP_Error( 'formhawk_content_type', __( 'Event payload must use JSON.', 'formhawk' ), array( 'status' => 415 ) );
+		if ( ! preg_match( '/^application\\/json(?:\\s*;|$)/i', (string) $request->get_header( 'content-type' ) ) ) {
+			return $this->reject( 'content_type', 415, $count );
 		}
-
-		if ( strlen( (string) $request->get_body() ) > self::MAX_BODY_BYTES ) {
-			return new \WP_Error( 'formhawk_payload_size', __( 'Event payload is too large.', 'formhawk' ), array( 'status' => 413 ) );
+		if ( strlen( $body ) > $limits['body_bytes'] ) {
+			return $this->reject( 'payload_size', 413 );
 		}
-
-		$payload = $request->get_json_params();
-		if ( ! is_array( $payload ) ) {
-			return new \WP_Error( 'formhawk_payload', __( 'Invalid event payload.', 'formhawk' ), array( 'status' => 400 ) );
+		// Depth is bounded before walking any nested structure. No raw payload is logged.
+		$payload = json_decode( $body, true, 8 );
+		if ( JSON_ERROR_NONE !== json_last_error() || ! is_array( $payload ) ) {
+			return $this->reject( 'payload', 400 );
 		}
-
-		$token = isset( $payload['token'] ) && is_scalar( $payload['token'] ) ? (string) $payload['token'] : '';
-		if ( ! $this->is_valid_public_token( $token ) ) {
-			return new \WP_Error( 'formhawk_token', __( 'Invalid tracking token.', 'formhawk' ), array( 'status' => 403 ) );
+		if ( ! isset( $payload['token'] ) || ! is_string( $payload['token'] ) || ! $this->is_valid_public_token( $payload['token'] ) ) {
+			return $this->reject( 'token', 403, $count );
 		}
-		if ( $this->request_limit_exceeded() ) {
-			return new \WP_Error( 'formhawk_rate_limit', __( 'Too many analytics requests. Try again shortly.', 'formhawk' ), array( 'status' => 429 ) );
+		$schema = ClientEventSchema::payload();
+		if ( ! ClientEventSchema::wire_types( $wire, $schema ) || ! ClientEventSchema::strict_types( $payload, $schema ) || is_wp_error( rest_validate_value_from_schema( $payload, $schema ) ) ) {
+			return $this->reject( 'schema', 400, $count );
 		}
-
-		$events = isset( $payload['events'] ) && is_array( $payload['events'] ) ? $payload['events'] : array();
-		if ( empty( $events ) || count( $events ) > self::MAX_BATCH_SIZE ) {
-			return new \WP_Error( 'formhawk_events', __( 'Event batch must contain between 1 and 20 events.', 'formhawk' ), array( 'status' => 400 ) );
-		}
-
-		$accepted = 0;
+		$events = $payload['events'];
 		foreach ( $events as $event ) {
-			$encoded_size = is_array( $event ) ? strlen( (string) wp_json_encode( $event ) ) : 0;
-			if ( $encoded_size > 0 && $encoded_size <= self::MAX_EVENT_BYTES && $this->ingestor->ingest_client( $event ) ) {
-				++$accepted;
+			if ( strlen( (string) wp_json_encode( $event ) ) > $limits['event_bytes'] ) {
+				return $this->reject( 'payload_size', 413, $count );
+			}
+			if ( ! ClientEventSchema::valid_event( $event ) ) {
+				return $this->reject( 'schema', 400, $count );
 			}
 		}
-
-		return rest_ensure_response(
+		if ( ! $this->budgets->reserve( 'events', $count, $limits['events_per_minute'], MINUTE_IN_SECONDS )
+			|| ! $this->budgets->reserve( 'cost', IngestionLimits::cost( $events ), $limits['cost_per_minute'], MINUTE_IN_SECONDS ) ) {
+			return $this->reject( 'storage' === $this->budgets->last_failure() ? 'storage' : 'rate_limit', 'storage' === $this->budgets->last_failure() ? 503 : 429, $count );
+		}
+		foreach ( $events as $event ) {
+			if ( ! $this->identities->validate( $event ) ) {
+				return $this->reject( 'form_identity', 422, $count );
+			}
+		}
+		$accepted = 0;
+		$reasons  = array();
+		foreach ( $events as $event ) {
+			if ( $this->ingestor->ingest_client( $event ) ) {
+				++$accepted;
+			} else {
+				$reasons[] = $this->ingestor->last_rejection();
+			}
+		}
+		if ( $reasons ) {
+			// Ingestor accounts for rejected events, including calls outside REST.
+			$this->diagnostics->increment( 'rejected_requests' );
+		}
+		$status   = $accepted ? 200 : ( in_array( 'storage', $reasons, true ) ? 503 : 429 );
+		$response = new \WP_REST_Response(
 			array(
-				'ok'       => true,
+				'ok'       => empty( $reasons ),
 				'accepted' => $accepted,
+				'rejected' => count( $reasons ),
+				'reasons'  => array_values( array_unique( $reasons ) ),
+			),
+			$status
+		);
+		if ( 429 === $status || 503 === $status ) {
+			$response->header( 'Retry-After', '60' );
+		}
+		return $response;
+	}
+
+	private function reject( $reason, $status, $events = 0 ) {
+		$this->diagnostics->increment( 'rejected_requests' );
+		$this->diagnostics->increment( 'rejected_events', $events );
+		if ( 429 === $status ) {
+			$this->diagnostics->increment( 'throttled_requests' );
+			$this->diagnostics->increment( 'throttled_events', $events );
+		}
+		if ( 503 === $status ) {
+			$this->diagnostics->increment( 'storage_rejected_events', $events );
+		}
+		return new \WP_Error(
+			'formhawk_' . $reason,
+			__( 'Analytics request rejected.', 'formhawk' ),
+			array(
+				'status'      => $status,
+				'retry_after' => 429 === $status || 503 === $status ? 60 : 0,
 			)
 		);
 	}
@@ -87,7 +177,7 @@ final class EventsController {
 	private function is_same_origin_request( \WP_REST_Request $request ) {
 		$site_url = home_url( '/' );
 		if ( ! wp_parse_url( $site_url, PHP_URL_HOST ) ) {
-			return true;
+			return false;
 		}
 
 		$origin = $request->get_header( 'origin' );
@@ -100,7 +190,8 @@ final class EventsController {
 			return $this->urls_have_same_origin( $site_url, $referer );
 		}
 
-		// Some privacy tools strip both headers. The public token still prevents blind writes.
+		// Privacy tools can strip both headers. Direct clients can also forge them;
+		// atomic budgets and dimension admission apply regardless of these headers.
 		return true;
 	}
 
@@ -135,22 +226,5 @@ final class EventsController {
 		// Keep already-cached 0.1.1 pages ingesting during the 0.2.0 rollout.
 		$legacy = hash_hmac( 'sha256', 'formhawk|' . home_url( '/' ) . '|0.1.1', wp_salt( 'nonce' ) );
 		return hash_equals( $legacy, (string) $token );
-	}
-
-	private function request_limit_exceeded() {
-		$limit = absint( apply_filters( 'formhawk_event_request_limit', self::MAX_REQUESTS_PER_MINUTE ) );
-		if ( 0 === $limit ) {
-			return false;
-		}
-
-		// A site-wide, minute-scoped counter provides coarse abuse resistance without storing IPs or visitor identifiers.
-		$key   = 'formhawk_rate_' . gmdate( 'YmdHi' );
-		$count = (int) get_transient( $key );
-		if ( $count >= $limit ) {
-			return true;
-		}
-
-		set_transient( $key, $count + 1, 2 * MINUTE_IN_SECONDS );
-		return false;
 	}
 }

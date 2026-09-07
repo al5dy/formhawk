@@ -9,7 +9,8 @@ use Formhawk\Support\Sanitizer;
 
 final class ContactForm7 implements FormIntegrationInterface {
 	private $events;
-	private $terminal_recorded = array();
+	private $terminal_recorded   = array();
+	private $validation_recorded = array();
 
 	public function __construct( EventRecorderInterface $events ) {
 		$this->events = $events;
@@ -82,7 +83,11 @@ final class ContactForm7 implements FormIntegrationInterface {
 		$path   = $this->submission_path();
 
 		if ( 'validation_failed' === $status ) {
-			$fields = array();
+			if ( isset( $this->validation_recorded[ $metadata['id'] ] ) ) {
+				return;
+			}
+			$this->validation_recorded[ $metadata['id'] ] = true;
+			$fields                                       = array();
 			if ( isset( $result['invalid_fields'] ) && is_array( $result['invalid_fields'] ) ) {
 				foreach ( array_keys( $result['invalid_fields'] ) as $field_name ) {
 					$key      = Sanitizer::identifier( $field_name, 'unknown' );

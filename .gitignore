@@ -11,6 +11,8 @@
 /.eslintcache
 /test-results/
 /playwright-report/
+/output/playwright/
+/.playwright-cli/
 *.log
 
 # Local configuration and secrets.
@@ -22,6 +24,7 @@ auth.json
 /phpcs.xml
 /phpstan.neon
 *.sql
+!/tests/Fixtures/schema-v3.sql
 *.sql.gz
 *.pem
 *.key

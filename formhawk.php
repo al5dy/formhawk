@@ -3,7 +3,7 @@
  * Plugin Name:       Formhawk
  * Plugin URI:        https://wordpress.org/plugins/formhawk/
  * Description:       Privacy-first form conversion analytics and health monitoring for popular WordPress form plugins and standard HTML forms.
- * Version:           0.2.0
+ * Version:           0.3.0
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Author:            al5dy
@@ -16,8 +16,8 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'FORMHAWK_VERSION', '0.2.0' );
-define( 'FORMHAWK_DB_VERSION', '3' );
+define( 'FORMHAWK_VERSION', '0.3.0' );
+define( 'FORMHAWK_DB_VERSION', '4' );
 define( 'FORMHAWK_FILE', __FILE__ );
 define( 'FORMHAWK_DIR', plugin_dir_path( __FILE__ ) );
 define( 'FORMHAWK_URL', plugin_dir_url( __FILE__ ) );

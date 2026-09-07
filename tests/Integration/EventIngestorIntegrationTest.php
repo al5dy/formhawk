@@ -77,7 +77,7 @@ final class EventIngestorIntegrationTest extends TestCase {
 		);
 
 		$this->assertSame( '1', $daily['submit_attempts'] );
-		$this->assertSame( '1', $daily['submissions'] );
+		$this->assertSame( '0', $daily['submissions'] );
 		$this->assertSame( '1', $daily['confirmed_successes'] );
 		$this->assertStringNotContainsString( 'visitor@example.test', wp_json_encode( array( $form, $daily ) ) );
 	}
@@ -171,7 +171,7 @@ final class EventIngestorIntegrationTest extends TestCase {
 		$stored                   = wp_json_encode( array( $form, $daily ) );
 
 		$this->assertSame( '1', $daily['submit_attempts'] );
-		$this->assertSame( '1', $daily['submissions'] );
+		$this->assertSame( '0', $daily['submissions'] );
 		$this->assertSame( '1', $daily['confirmed_successes'] );
 		$this->assertSame( '1', $daily['mail_successes'] );
 		$this->assertStringNotContainsString( 'visitor@example.test', $stored );
@@ -207,7 +207,7 @@ final class EventIngestorIntegrationTest extends TestCase {
 		);
 
 		$this->assertSame( '1', $daily['submit_attempts'] );
-		$this->assertSame( '1', $daily['submissions'] );
+		$this->assertSame( '0', $daily['submissions'] );
 		$this->assertSame( '0', $daily['confirmed_successes'] );
 	}
 
@@ -260,14 +260,14 @@ final class EventIngestorIntegrationTest extends TestCase {
 		$this->assertNotNull( $form );
 		$this->created_form_ids[] = (int) $form['id'];
 		$fields                   = $wpdb->get_results(
-			$wpdb->prepare( 'SELECT field_key, field_label, validation_errors FROM %i WHERE form_id = %d ORDER BY field_key', Database::fields_table(), $form['id'] ),
+			$wpdb->prepare( 'SELECT field_key, field_label, client_validation_errors FROM %i WHERE form_id = %d ORDER BY field_key', Database::fields_table(), $form['id'] ),
 			ARRAY_A
 		);
 
 		$this->assertCount( 2, $fields );
 		$this->assertSame( 'Work email', $fields[0]['field_label'] );
-		$this->assertSame( '1', $fields[0]['validation_errors'] );
-		$this->assertSame( '1', $fields[1]['validation_errors'] );
+		$this->assertSame( '1', $fields[0]['client_validation_errors'] );
+		$this->assertSame( '1', $fields[1]['client_validation_errors'] );
 	}
 
 	private function find_form( $provider, $provider_form_id, $page_path ) {

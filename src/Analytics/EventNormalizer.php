@@ -12,6 +12,7 @@ final class EventNormalizer {
 		'field_interaction',
 		'validation_error',
 		'validation_failure',
+		'client_validation_failure',
 		'form_abandon',
 		'form_submit',
 	);
@@ -40,8 +41,10 @@ final class EventNormalizer {
 		$event['provider']         = $provider;
 		$event['provider_form_id'] = $provider_form_id;
 
-		$normalized         = $this->common( $event );
-		$normalized['type'] = $type;
+		$normalized             = $this->common( $event );
+		$normalized['type']     = 'validation_failure' === $type ? 'client_validation_failure' : $type;
+		$normalized['source']   = 'browser';
+		$normalized['evidence'] = 'observed';
 
 		if ( isset( $event['duration_ms'] ) ) {
 			$normalized['duration_ms'] = Sanitizer::duration_ms( $event['duration_ms'] );
@@ -59,8 +62,10 @@ final class EventNormalizer {
 	}
 
 	public function server( $type, array $event ) {
-		$normalized         = $this->common( $event );
-		$normalized['type'] = sanitize_key( $type );
+		$normalized             = $this->common( $event );
+		$normalized['type']     = sanitize_key( $type );
+		$normalized['source']   = 'provider';
+		$normalized['evidence'] = 'provider_confirmed';
 
 		if ( isset( $event['failure_code'] ) ) {
 			$normalized['failure_code'] = Sanitizer::identifier( $event['failure_code'], 'form_failure' );
@@ -90,11 +95,12 @@ final class EventNormalizer {
 		$normalized = array();
 		foreach ( array_slice( $fields, 0, 50 ) as $field ) {
 			if ( is_array( $field ) ) {
-				$normalized[] = $this->field( $field );
+				$item                       = $this->field( $field );
+				$normalized[ $item['key'] ] = $item;
 			}
 		}
 
-		return $normalized;
+		return array_values( $normalized );
 	}
 
 	private function field( array $field ) {

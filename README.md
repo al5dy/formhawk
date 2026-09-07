@@ -70,7 +70,7 @@ npm run build
 npm run build:release
 ```
 
-The installable archive is `dist/formhawk-0.2.0.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
+The installable archive is `dist/formhawk-0.3.0.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
 
 ## Project documentation
 
@@ -78,6 +78,7 @@ The installable archive is `dist/formhawk-0.2.0.zip`. Inspect the archive and ru
 - [Contributing](CONTRIBUTING.md)
 - [Provider support](docs/PROVIDER-SUPPORT.md)
 - [Database migrations](docs/MIGRATIONS.md)
+- [Ingestion limits, evidence semantics and hardening](docs/HARDENING.md)
 - [Free roadmap](docs/ROADMAP-FREE.md)
 - [Pro roadmap](docs/ROADMAP-PRO.md)
 - [Changelog](readme.txt#changelog)

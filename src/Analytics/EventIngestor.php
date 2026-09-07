@@ -5,22 +5,42 @@ namespace Formhawk\Analytics;
 use Formhawk\Contracts\EventRecorderInterface;
 use Formhawk\Domain\ProviderCatalog;
 use Formhawk\Infrastructure\Database;
+use Formhawk\Infrastructure\IngestionDiagnostics;
 use Formhawk\Support\Sanitizer;
 
 final class EventIngestor implements EventRecorderInterface {
 	private $forms;
 	private $normalizer;
+	private $guard;
+	private $diagnostics;
+	private $rejection      = '';
+	private $write_failed   = false;
 	private $identity_cache = array();
 
-	public function __construct( FormRepository $forms, EventNormalizer $normalizer = null ) {
-		$this->forms      = $forms;
-		$this->normalizer = $normalizer ? $normalizer : new EventNormalizer();
+	public function __construct( FormRepository $forms, EventNormalizer $normalizer = null, CardinalityGuard $guard = null, IngestionDiagnostics $diagnostics = null ) {
+		$this->forms       = $forms;
+		$this->guard       = $guard ? $guard : new CardinalityGuard();
+		$this->diagnostics = $diagnostics ? $diagnostics : new IngestionDiagnostics();
+		$this->normalizer  = $normalizer ? $normalizer : new EventNormalizer();
+	}
+
+	public function last_rejection() {
+		return $this->rejection;
+	}
+
+	private function reject( $reason ) {
+		$this->rejection = $reason;
+		$this->diagnostics->increment( 'rejected_events' );
+		if ( in_array( $reason, array( 'cardinality', 'storage' ), true ) ) {
+			$this->diagnostics->increment( $reason . '_rejected_events' );
+		}
+		return false;
 	}
 
 	public function ingest_client( array $event ) {
 		$normalized = $this->normalizer->client( $event );
 		if ( ! is_array( $normalized ) ) {
-			return false;
+			return $this->reject( 'schema' );
 		}
 
 		return $this->ingest( $normalized, false );
@@ -103,6 +123,25 @@ final class EventIngestor implements EventRecorderInterface {
 	}
 
 	private function ingest( array $event, $trusted ) {
+		global $wpdb;
+		$previous = $wpdb->suppress_errors( true );
+		try {
+			return $this->write_event( $event, $trusted );
+		} finally {
+			$wpdb->suppress_errors( $previous );
+		}
+	}
+
+	private function write_event( array $event, $trusted ) {
+		if ( ! Database::ingestion_ready() ) {
+			return $this->reject( 'storage' );
+		}
+		$this->rejection    = '';
+		$this->write_failed = false;
+		$admission          = $this->guard->admit( $event );
+		if ( 'accepted' !== $admission ) {
+			return $this->reject( $admission );
+		}
 		$type         = isset( $event['type'] ) ? $event['type'] : '';
 		$identity_key = implode(
 			'|',
@@ -118,8 +157,8 @@ final class EventIngestor implements EventRecorderInterface {
 		$identity     = $this->identity_cache[ $identity_key ];
 		$form_id      = $identity['form_id'];
 		$placement_id = $identity['placement_id'];
-		if ( ! $form_id ) {
-			return false;
+		if ( ! $form_id || ! $placement_id ) {
+			return $this->reject( 'storage' );
 		}
 
 		$duration = Sanitizer::duration_ms( isset( $event['duration_ms'] ) ? $event['duration_ms'] : 0 );
@@ -137,11 +176,25 @@ final class EventIngestor implements EventRecorderInterface {
 				$this->increment_field( $form_id, $field, 'interactions' );
 				break;
 			case 'validation_error':
-				$this->increment_field( $form_id, $field, 'validation_errors' );
+				$this->increment_field( $form_id, $field, 'client_validation_errors' );
+				break;
+			case 'client_validation_failure':
+				$this->increment_aggregates( $form_id, $placement_id, array( 'client_validation_failures' => 1 ) );
+				$this->increment_fields( $form_id, $fields, 'client_validation_errors' );
 				break;
 			case 'validation_failure':
-				$this->increment_aggregates( $form_id, $placement_id, array( 'validation_failures' => 1 ) );
-				$this->increment_fields( $form_id, $fields, 'validation_errors' );
+				if ( ! $trusted ) {
+					return $this->reject( 'schema' );
+				}
+				$this->increment_aggregates(
+					$form_id,
+					$placement_id,
+					array(
+						'provider_validation_failures' => 1,
+						'provider_validation_outcomes' => 1,
+					)
+				);
+				$this->increment_fields( $form_id, $fields, 'provider_validation_errors' );
 				break;
 			case 'form_abandon':
 				$increments = array( 'abandons' => 1 );
@@ -156,9 +209,6 @@ final class EventIngestor implements EventRecorderInterface {
 				break;
 			case 'form_submit':
 				$increments = array( 'submit_attempts' => 1 );
-				if ( ! ProviderCatalog::has_server_success( $event['provider'] ) ) {
-					$increments['submissions'] = 1;
-				}
 				if ( $duration > 0 ) {
 					$increments['duration_total_ms'] = $duration;
 					$increments['duration_samples']  = 1;
@@ -170,8 +220,8 @@ final class EventIngestor implements EventRecorderInterface {
 					return false;
 				}
 				$increments = array(
-					'submissions'         => 1,
-					'confirmed_successes' => 1,
+					'provider_validation_outcomes' => 1,
+					'confirmed_successes'          => 1,
 				);
 				if ( ! empty( $event['mail_success'] ) ) {
 					$increments['mail_successes'] = 1;
@@ -214,8 +264,15 @@ final class EventIngestor implements EventRecorderInterface {
 				return false;
 		}
 
+		if ( $this->has_write_failed() ) {
+			return $this->reject( 'storage' );
+		}
 		do_action( 'formhawk_event_recorded', $type, $form_id, $event );
 		return true;
+	}
+
+	private function has_write_failed() {
+		return $this->write_failed;
 	}
 
 	private function increment_aggregates( $form_id, $placement_id, array $increments ) {
@@ -227,70 +284,26 @@ final class EventIngestor implements EventRecorderInterface {
 
 	private function increment_daily( $table, $identity_column, $identity_id, array $increments ) {
 		global $wpdb;
-
-		$allowed    = array(
-			'views',
-			'starts',
-			'submit_attempts',
-			'submissions',
-			'confirmed_successes',
-			'abandons',
-			'validation_failures',
-			'failures',
-			'mail_successes',
-			'mail_failures',
-			'duration_total_ms',
-			'duration_samples',
-		);
+		$allowed    = array( 'views', 'starts', 'submit_attempts', 'confirmed_successes', 'abandons', 'client_validation_failures', 'provider_validation_failures', 'provider_validation_outcomes', 'failures', 'mail_successes', 'mail_failures', 'duration_total_ms', 'duration_samples' );
 		$increments = array_intersect_key( $increments, array_flip( $allowed ) );
-		if ( empty( $increments ) ) {
+		if ( ! $increments ) {
 			return;
 		}
-
-		$counters = array_fill_keys( $allowed, 0 );
-		foreach ( $increments as $column => $value ) {
-			$counters[ $column ] = absint( $value );
+		$columns = array_keys( $increments );
+		$args    = array_merge( array( $table, $identity_column ), $columns, array( absint( $identity_id ), current_time( 'Y-m-d' ) ), array_map( 'absint', array_values( $increments ) ) );
+		$updates = array();
+		foreach ( $columns as $column ) {
+			$updates[] = '%i = %i + VALUES(%i)';
+			array_push( $args, $column, $column, $column );
 		}
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Atomic counter upsert into Formhawk's custom analytics table.
-		$wpdb->query(
-			$wpdb->prepare(
-				'INSERT INTO %i (
-					%i, stat_date, views, starts, submit_attempts, submissions,
-					confirmed_successes, abandons, validation_failures, failures,
-					mail_successes, mail_failures, duration_total_ms, duration_samples
-				) VALUES ( %d, %s, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d )
-				ON DUPLICATE KEY UPDATE
-					views = views + VALUES(views),
-					starts = starts + VALUES(starts),
-					submit_attempts = submit_attempts + VALUES(submit_attempts),
-					submissions = submissions + VALUES(submissions),
-					confirmed_successes = confirmed_successes + VALUES(confirmed_successes),
-					abandons = abandons + VALUES(abandons),
-					validation_failures = validation_failures + VALUES(validation_failures),
-					failures = failures + VALUES(failures),
-					mail_successes = mail_successes + VALUES(mail_successes),
-					mail_failures = mail_failures + VALUES(mail_failures),
-					duration_total_ms = duration_total_ms + VALUES(duration_total_ms),
-					duration_samples = duration_samples + VALUES(duration_samples)',
-				$table,
-				$identity_column,
-				absint( $identity_id ),
-				current_time( 'Y-m-d' ),
-				$counters['views'],
-				$counters['starts'],
-				$counters['submit_attempts'],
-				$counters['submissions'],
-				$counters['confirmed_successes'],
-				$counters['abandons'],
-				$counters['validation_failures'],
-				$counters['failures'],
-				$counters['mail_successes'],
-				$counters['mail_failures'],
-				$counters['duration_total_ms'],
-				$counters['duration_samples']
-			)
-		);
+		$query = 'INSERT INTO %i (%i, stat_date, ' . implode( ', ', array_fill( 0, count( $columns ), '%i' ) )
+			. ') VALUES (%d, %s, ' . implode( ', ', array_fill( 0, count( $columns ), '%d' ) )
+			. ') ON DUPLICATE KEY UPDATE ' . implode( ', ', $updates );
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Only fixed placeholder fragments are composed; columns are selected from the internal counter allowlist.
+		$sql = $wpdb->prepare( $query, $args );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Prepared above from fixed placeholder fragments and allowlisted counter columns; every identifier/value is bound. Paired validation counters share one atomic statement.
+		$result             = $wpdb->query( $sql );
+		$this->write_failed = false === $result || $this->write_failed;
 	}
 
 	private function increment_field( $form_id, array $field, $column ) {
@@ -299,7 +312,7 @@ final class EventIngestor implements EventRecorderInterface {
 
 	private function increment_fields( $form_id, array $fields, $column ) {
 		global $wpdb;
-		if ( ! in_array( $column, array( 'interactions', 'abandonments', 'validation_errors' ), true ) || empty( $fields ) ) {
+		if ( ! in_array( $column, array( 'interactions', 'abandonments', 'client_validation_errors', 'provider_validation_errors' ), true ) || empty( $fields ) ) {
 			return;
 		}
 
@@ -336,6 +349,7 @@ final class EventIngestor implements EventRecorderInterface {
 		$sql = $wpdb->prepare( $query, $args );
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Atomic counter upsert; the table/column identifiers are allowlisted and all field values were prepared above.
-		$wpdb->query( $sql );
+		$result             = $wpdb->query( $sql );
+		$this->write_failed = false === $result || $this->write_failed;
 	}
 }

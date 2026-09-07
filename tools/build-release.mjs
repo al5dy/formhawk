@@ -19,17 +19,23 @@ const excludedPaths = new Set([
 	'.idea',
 	'.phpstan-cache',
 	'.phpunit.result.cache',
+	'.playwright-cli',
 	'AGENTS.md',
 	'composer.lock',
 	'dist',
 	'eslint.config.js',
 	'node_modules',
+	'output',
+	'coverage',
+	'test-results',
+	'playwright-report',
 	'package-lock.json',
 	'phpcs.xml.dist',
 	'phpstan.neon.dist',
 	'phpunit.xml.dist',
 	'tests',
 	'tools/phpstan-bootstrap.php',
+	'tools/benchmark-migration.php',
 	'vendor',
 	'vitest.config.js',
 ]);
@@ -39,6 +45,13 @@ const shouldCopy = source => {
 
 	if (!path) {
 		return true;
+	}
+
+	// Local hidden configuration and diagnostics must never enter a distributable archive.
+	if (path.split('/').some(part => part.startsWith('.'))
+		|| /\.(?:sql(?:\.gz)?|pem|key|log)$/i.test(path)
+		|| /(?:^|\/)auth\.json$/.test(path)) {
+		return false;
 	}
 
 	for (const excludedPath of excludedPaths) {

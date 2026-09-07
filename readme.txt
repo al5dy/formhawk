@@ -4,7 +4,7 @@ Tags: form analytics, contact form 7, wpforms, elementor forms, form abandonment
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.2.0
+Stable tag: 0.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,19 +35,19 @@ Just actionable form analytics stored inside WordPress.
 
 = See where your forms are losing conversions =
 
-Formhawk automatically tracks the full form funnel:
+Formhawk tracks separate aggregate signals:
 
-**Views → Starts → Submissions**
+**Views → Starts → Browser submit attempts**, plus provider-confirmed successes where available.
 
 For every tracked form you can see:
 
 * Form views.
 * Form starts.
-* Submissions.
+* Browser submit attempts.
 * Abandonments.
-* Conversion rate.
+* Provider-confirmed successes and confirmed conversion where supported; otherwise N/A.
 * Abandonment rate.
-* Validation failures.
+* Browser validation friction and separate provider validation rejections.
 * Submission failures.
 * Average completion time.
 * Last confirmed success.
@@ -244,7 +244,8 @@ Formhawk uses:
 * Batched frontend event delivery.
 * A dependency-free frontend tracker.
 * Same-origin REST event ingestion.
-* A public, site-bound integrity token. It is abuse resistance, not a visitor secret.
+* A public, site-bound routing token. It is not authentication or a secret.
+* Atomic site-wide request, event-cost and structural cardinality budgets without visitor identifiers.
 * `IntersectionObserver` for actual form-view detection.
 * `MutationObserver` for dynamically inserted forms.
 
@@ -362,7 +363,7 @@ action.
 
 Formhawk tracks how visitors interact with WordPress forms and helps identify conversion problems and form failures.
 
-It shows views, starts, submissions, abandonment, conversion rates, field-level friction and form health.
+It shows views, starts, browser submit attempts, provider-confirmed successes where available, abandonment, field friction and evidence-aware form health. Confirmed conversion excludes generic HTML forms. Browser validation is a friction count, not a failure rate; provider rejection share uses only observed provider rejections and accepted submissions as its denominator.
 
 = Does Formhawk work with Contact Form 7? =
 
@@ -533,6 +534,17 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 
 == Changelog ==
 
+= 0.3.0 =
+
+* Hardened public ingestion with strict JSON/event schemas, bounded nesting and metadata, atomic request/event/cost limits, and site/per-form dimension budgets.
+* Added configurable ingestion limits, CF7/WPForms form-ID existence checks, rejection diagnostics and HTTP throttling feedback without IP addresses or visitor identifiers.
+* Removed mixed-evidence conversion: generic HTML exposes observed attempts and N/A confirmations; confirmed dashboard conversion includes supported providers only.
+* Separated browser validation friction from provider validation evidence and introduced a paired denominator for provider rejection share.
+* Preserved legacy submissions and validation counters without reclassifying historical evidence; migration v4 registers existing dimensions in restart-safe batches.
+* Fixed empty WPForms error collections being counted as validation failures.
+* Hardened label extraction against nested control contents and later personalized labels; retained native form behavior and optional API fallbacks.
+* Expanded abuse, concurrency, migration, evidence and tracker privacy regression coverage. Build instructions, defaults and recovery details are in docs/HARDENING.md.
+
 = 0.2.0 =
 
 * Added first-class WPForms Lite and Pro discovery, stable identity, server-confirmed success and validation analytics.
@@ -565,6 +577,10 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 * Added dynamic form discovery and developer extension hooks.
 
 == Upgrade Notice ==
+
+= 0.3.0 =
+
+Evidence-aware metrics and public ingestion hardening. Existing analytics are preserved. Large structural migrations resume in bounded batches; analytics pauses until the upgrade completes. Legacy mixed counters remain visible separately. Review docs/HARDENING.md when tuning limits for large sites.
 
 = 0.2.0 =
 

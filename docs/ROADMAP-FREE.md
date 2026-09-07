@@ -1,8 +1,8 @@
 # Formhawk Free — Product & Engineering Roadmap
 
 **Document status:** Living roadmap containing future work only  
-**Code baseline reviewed:** Formhawk 0.2.0  
-**Review date:** 2026-09-01  
+**Code baseline reviewed:** Formhawk 0.3.0  
+**Review date:** 2026-09-07  
 **Target:** a trustworthy Formhawk Free 1.0 distributed through WordPress.org  
 **Product boundary:** a complete, privacy-first, local form analytics and health product for one WordPress installation
 
@@ -103,7 +103,7 @@ The following gaps remain after the 0.2.0 provider-platform release and must gui
 
 | Area | Verified gap | Consequence | Release gate |
 |---|---|---|---|
-| Public ingestion | Body/batch/event bounds, client-event allowlists, same-origin checks, a site-bound public token and a coarse site-wide burst limit exist; distributed pollution detection remains limited | A determined distributed actor can still pollute public aggregate analytics | Hardening release |
+| Public ingestion | Strict schemas, atomic throughput/cost budgets and structural cardinality caps are implemented; sustained abuse detection and hosting/proxy coverage remain limited | A determined actor can consume shared site capacity or pollute admitted aggregates | Continued hardening |
 | Dashboard scale | Overview pagination and chunked retention cleanup are bounded; very large-site query benchmarks are not yet automated | Regressions at agency-scale data volumes could be detected late | Core v2 |
 | Release automation | Local Composer/npm quality gates, `.distignore` and deterministic ZIP verification exist, but CI remains to be added | Release integrity still depends on running the documented local gate | Release integrity |
 | Provider compatibility lab | Real WPForms Lite HTTP lifecycles and Elementor Pro 3.35.1 API/markup compatibility are exercised; WPForms Pro and full browser Elementor Pro E2E remain unavailable | Pro-only changes still require a broader licensed compatibility matrix | Reach maintenance |
@@ -173,7 +173,7 @@ This is the highest-priority product release.
 
 ## 5.1 Canonical evidence and outcome semantics
 
-Replace mixed counters with explicit concepts.
+0.3.0 separates browser attempts, trusted confirmations and validation sources; the shipped contract is in `docs/HARDENING.md`. Remaining work is a fully extensible canonical event contract across additional providers and the following concepts.
 
 | Canonical concept | Meaning | Valid evidence |
 |---|---|---|
@@ -206,24 +206,7 @@ Every event must include:
 
 ## 5.2 Honest metric presentation
 
-Use explicit labels:
-
-- Attempts;
-- Provider-confirmed successes;
-- Provider failures;
-- Mail accepted by WordPress/provider;
-- Mail failures;
-- External delivery: unavailable in Free.
-
-Default conversion:
-
-- confirmed start → success conversion when provider confirmation exists;
-- start → attempt rate when only browser attempts exist;
-- no mixed global rate across incompatible evidence without a labelled normalization rule.
-
-Global `wp_mail_succeeded`/`wp_mail_failed` observations remain site-level mail-health facts unless a trusted provider adapter can safely attribute the operation to a specific form. Never guess that relationship from timing alone.
-
-Unavailable metrics display `N/A` plus a short explanation, not `0`.
+Mixed conversion and validation denominators were removed in 0.3.0. Remaining presentation work: explain capability gaps for future providers and make aggregate coverage/loss visible alongside comparisons. Keep global mail-health signals separate from attributed form outcomes.
 
 ## 5.3 Separate definitions, placements, and fields
 
@@ -256,7 +239,7 @@ Acceptance criteria:
 
 ## 5.4 Versioned migrations
 
-Create a migration runner with one class per schema/data transition.
+Version 4 has restart-safe additive DDL and bounded structural backfill. Extend this pattern to future transitions and migrate the older version-2/3 inline steps into separate classes when they next change.
 
 Requirements:
 
@@ -306,24 +289,9 @@ Adopt:
 
 ## 6.1 Treat the browser token as public
 
-The token is a routing/integrity aid, not a secret and not authentication.
+The token remains public. Strict schemas, byte/count/nesting caps, atomic request/event/cost limits, structural cardinality budgets and bounded rejection diagnostics shipped in 0.3.0; see `docs/HARDENING.md`.
 
-Add layered controls:
-
-- REST route argument schema;
-- required JSON content type;
-- strict request byte limit;
-- batch count and per-event byte limits;
-- strict provider/event/evidence allowlists;
-- nested-object depth and field-count limits;
-- path, form, placement, and field cardinality budgets;
-- site-level burst control;
-- optional short-lived privacy-reviewed source buckets without raw IP persistence;
-- rejection reason counters with bounded labels;
-- sustained-abuse diagnostics without noisy global notices;
-- generic error responses that never expose SQL details.
-
-Do not claim fraud-proof analytics.
+Remaining work: sustained-abuse detection based on aggregates, dashboard explanations for exhausted budgets, and real-host database-proxy/WAF/cache coverage. Do not add visitor/IP/fingerprint buckets or claim fraud-proof analytics.
 
 ## 6.2 Tracker correctness v2
 

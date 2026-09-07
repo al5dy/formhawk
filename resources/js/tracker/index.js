@@ -15,6 +15,17 @@ function attributeValue(element, name) {
 	return element ? cleanText(element.getAttribute(name), 191) : '';
 }
 
+function structuralLabel(element) {
+	if (!element || element.closest('[contenteditable], [aria-live]')) {
+		return '';
+	}
+	// Nested controls, outputs and arbitrary dynamic markup can contain visitor text.
+	// Only the label's own text nodes are metadata; ambiguous labels fall back to a key.
+	return cleanText(Array.from(element.childNodes)
+		.filter((node) => node.nodeType === 3)
+		.map((node) => node.nodeValue).join(' '), 191);
+}
+
 function technicalHiddenAttribute(form, name) {
 	const input = Array.from(form.querySelectorAll('input[type="hidden"][name]'))
 		.find((candidate) => candidate.getAttribute('name') === name);
@@ -73,7 +84,7 @@ const PROVIDER_DETECTORS = Object.freeze([
 		title: (form) => {
 			const container = form.closest('.wpforms-container');
 			const title = container ? container.querySelector('.wpforms-title') : null;
-			return cleanText(title ? title.textContent : '', 255);
+			return structuralLabel(title);
 		},
 	},
 	{
@@ -164,7 +175,7 @@ function trackableField(field) {
 	}
 	const tag = String(field.tagName).toUpperCase();
 	const type = attributeValue(field, 'type').toLowerCase();
-	return tag !== 'BUTTON' && !['hidden', 'submit', 'button', 'reset', 'image'].includes(type);
+	return ['INPUT', 'SELECT', 'TEXTAREA'].includes(tag) && !['hidden', 'submit', 'button', 'reset', 'image'].includes(type);
 }
 
 function wpformsFieldMeta(field) {
@@ -181,7 +192,7 @@ function wpformsFieldMeta(field) {
 	const typeMatch = wrapper ? Array.from(wrapper.classList).find((className) => /^wpforms-field-[a-z0-9-]+$/.test(className) && !/^wpforms-field-(small|medium|large|required)$/.test(className)) : '';
 	return {
 		key: cleanText(`${base}${part}`, 191),
-		label: cleanText(labelNode ? labelNode.textContent : '', 191),
+		label: structuralLabel(labelNode),
 		type: cleanText(typeMatch ? typeMatch.replace('wpforms-field-', '') : normalizedInputType(field), 32),
 	};
 }
@@ -199,7 +210,7 @@ function elementorFieldMeta(field) {
 		: '';
 	return {
 		key: cleanText(match[1], 191),
-		label: cleanText(labelNode ? labelNode.textContent : '', 191),
+		label: structuralLabel(labelNode),
 		type: cleanText(typeClass ? typeClass.replace('elementor-field-type-', '') : normalizedInputType(field), 32),
 	};
 }
@@ -227,11 +238,11 @@ export function fieldMeta(field, form, provider = '') {
 	let label = attributeValue(field, 'data-formhawk-label') || attributeValue(field, 'aria-label');
 	if (!label && field.id) {
 		const explicit = form.querySelector(`label[for="${cssEscape(field.id)}"]`);
-		label = explicit ? explicit.textContent : '';
+		label = structuralLabel(explicit);
 	}
 	if (!label && field.closest) {
 		const parentLabel = field.closest('label');
-		label = parentLabel ? parentLabel.textContent : '';
+		label = structuralLabel(parentLabel);
 	}
 	label = label || attributeValue(field, 'placeholder') || key;
 	return {key: cleanText(key, 191), label: cleanText(label, 191), type: normalizedInputType(field)};
@@ -251,6 +262,7 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 	}
 
 	const states = new WeakMap();
+	const metadataCache = new WeakMap();
 	const activeForms = new Set();
 	const lifecycleCache = new Map();
 	const nextInstanceIds = new Map();
@@ -264,7 +276,7 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 	const path = () => cleanText(config.path || browserWindow.location.pathname || '/', 500) || '/';
 
 	function eventFor(state, type, extra = null) {
-		return Object.assign({type, ...state.meta}, extra || {});
+		return Object.assign({schema_version: 2, type, ...state.meta}, extra || {});
 	}
 
 	function queueEvent(event, urgent = false) {
@@ -295,13 +307,15 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 			} catch {}
 		}
 		if (typeof browserWindow.fetch === 'function') {
-			browserWindow.fetch(config.endpoint, {
+			try {
+				browserWindow.fetch(config.endpoint, {
 				method: 'POST',
 				headers: {'Content-Type': 'application/json'},
 				credentials: 'same-origin',
 				keepalive: Boolean(beacon),
 				body,
 			}).catch(() => {});
+			} catch {}
 		}
 	}
 
@@ -329,7 +343,7 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 		if (!state || state.completed) {
 			return;
 		}
-		const metadata = fieldMeta(field, form, state.meta.provider);
+		const metadata = metadataCache.get(field);
 		if (!metadata) {
 			return;
 		}
@@ -343,21 +357,24 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 
 	function emitValidation(state) {
 		state.validationTimer = null;
-		const fields = Array.from(state.validationFields.values());
+		const fields = Array.from(state.validationFields.values()).filter((field) => !state.validationReportedFields.has(field.key));
 		state.validationFields.clear();
-		if (!fields.length || state.completed) {
+		if (state.completed) {
 			return;
 		}
 		// A validation response leaves the form active, so a recent provider submit
 		// attempt must not suppress a real pagehide abandonment.
 		state.lastSubmitAt = 0;
-		const signature = fields.map((field) => field.key).sort().join('|');
-		if (signature === state.lastValidationSignature && Date.now() - state.lastValidationAt < 500) {
-			return;
+		// One browser friction report per form lifecycle; field friction once per key.
+		// This is structural deduplication, independent of provider evidence and timing.
+		const firstReport = !state.validationReported;
+		state.validationReported = true;
+		fields.forEach((field) => state.validationReportedFields.add(field.key));
+		if (firstReport) {
+			queueEvent(eventFor(state, 'client_validation_failure', {fields: fields.slice(0, 50)}));
+		} else {
+			fields.slice(0, 50).forEach((field) => queueEvent(eventFor(state, 'validation_error', {field})));
 		}
-		state.lastValidationSignature = signature;
-		state.lastValidationAt = Date.now();
-		queueEvent(eventFor(state, 'validation_failure', {fields}));
 	}
 
 	function validationFields(form, elements) {
@@ -367,10 +384,12 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 		}
 		ensureStarted(state);
 		Array.from(elements || []).forEach((field) => {
-			const metadata = fieldMeta(field, form, state.meta.provider);
+			const metadata = metadataCache.get(field);
 			if (metadata) {
 				state.lastField = metadata;
-				state.validationFields.set(metadata.key, metadata);
+				if (state.validationFields.size < 50 && !state.validationReportedFields.has(metadata.key)) {
+					state.validationFields.set(metadata.key, metadata);
+				}
 			}
 		});
 		if (!state.validationTimer) {
@@ -381,8 +400,16 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 	function markComplete(form) {
 		const state = states.get(form);
 		if (state) {
+			flushValidation(state);
 			state.completed = true;
 			state.abandoned = false;
+		}
+	}
+
+	function flushValidation(state) {
+		if (state.validationTimer) {
+			browserWindow.clearTimeout(state.validationTimer);
+			emitValidation(state);
 		}
 	}
 
@@ -401,7 +428,7 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 			return;
 		}
 		state.abandoned = true;
-		const extra = {duration_ms: state.startedAt ? Math.max(0, Date.now() - state.startedAt) : 0};
+		const extra = {duration_ms: state.startedAt ? Math.min(3600000, Math.max(0, Date.now() - state.startedAt)) : 0};
 		if (state.lastField) {
 			extra.field = state.lastField;
 		}
@@ -426,21 +453,40 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 		return `${prefix}${next}`;
 	}
 
-	const intersectionObserver = 'IntersectionObserver' in browserWindow
-		? new browserWindow.IntersectionObserver((entries) => {
-			entries.forEach((entry) => {
-				const state = states.get(entry.target);
-				if (state && entry.isIntersecting && !state.viewed) {
-					state.viewed = true;
-					queueEvent(eventFor(state, 'form_view'));
-					intersectionObserver.unobserve(entry.target);
-				}
-			});
-		}, {threshold: [0]})
-		: null;
+	let intersectionObserver = null;
+	try {
+		if (typeof browserWindow.IntersectionObserver === 'function') {
+			intersectionObserver = new browserWindow.IntersectionObserver((entries) => {
+				entries.forEach((entry) => {
+					const state = states.get(entry.target);
+					if (state && entry.isIntersecting && !state.viewed) {
+						state.viewed = true;
+						queueEvent(eventFor(state, 'form_view'));
+						intersectionObserver.unobserve(entry.target);
+					}
+				});
+			}, {threshold: [0]});
+		}
+	} catch {}
+
+	function cacheFields(root) {
+		const fields = root && typeof root.querySelectorAll === 'function'
+			? Array.from(root.querySelectorAll('input, select, textarea')) : [];
+		if (trackableField(root)) {
+			fields.unshift(root);
+		}
+		fields.forEach((field) => {
+			const form = field.form;
+			const state = states.get(form);
+			if (state && !metadataCache.has(field)) {
+				metadataCache.set(field, fieldMeta(field, form, state.meta.provider));
+			}
+		});
+	}
 
 	function attachForm(form, state) {
 		states.set(form, state);
+		cacheFields(form);
 		activeForms.add(form);
 		state.currentForm = form;
 		if (!state.viewed) {
@@ -461,10 +507,11 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 			if (!current || current.completed || Date.now() - current.lastSubmitAt < 750) {
 				return;
 			}
+			flushValidation(current);
 			ensureStarted(current);
 			current.lastSubmitAt = Date.now();
 			queueEvent(eventFor(current, 'form_submit', {
-				duration_ms: current.startedAt ? Math.max(0, Date.now() - current.startedAt) : 0,
+				duration_ms: current.startedAt ? Math.min(3600000, Math.max(0, Date.now() - current.startedAt)) : 0,
 			}), true);
 			if (!SERVER_PROVIDERS.has(current.meta.provider)) {
 				current.completed = true;
@@ -492,8 +539,8 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 				interacted: new Set(),
 				validationFields: new Map(),
 				validationTimer: null,
-				lastValidationSignature: '',
-				lastValidationAt: 0,
+				validationReported: false,
+				validationReportedFields: new Set(),
 				currentForm: form,
 			};
 			lifecycleCache.set(key, state);
@@ -513,6 +560,8 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 			forms.push(...root.querySelectorAll('form'));
 		}
 		forms.forEach(trackForm);
+		// Snapshot newly inserted fields before later interaction can personalize their labels.
+		cacheFields(root);
 	}
 
 	function formFromProviderEvent(event) {
@@ -583,6 +632,9 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 						abandon(form, state);
 					}
 					activeForms.delete(form);
+					if (state && state.currentForm === form) {
+						state.currentForm = null;
+					}
 					if (intersectionObserver) {
 						intersectionObserver.unobserve(form);
 					}
@@ -594,26 +646,34 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 	function init() {
 		bindProviderEvents();
 		discover(browserDocument);
-		if ('MutationObserver' in browserWindow && browserDocument.body) {
-			mutationObserver = new browserWindow.MutationObserver((mutations) => {
-				mutations.forEach((mutation) => {
-					Array.from(mutation.addedNodes || []).forEach((node) => {
-						if (node && node.nodeType === 1) {
-							discover(node);
-						}
-					});
-					Array.from(mutation.removedNodes || []).forEach((node) => {
-						if (node && node.nodeType === 1) {
-							cleanupRemoved(node);
-						}
+		try {
+			if (typeof browserWindow.MutationObserver === 'function' && browserDocument.body) {
+				mutationObserver = new browserWindow.MutationObserver((mutations) => {
+					mutations.forEach((mutation) => {
+						Array.from(mutation.addedNodes || []).forEach((node) => {
+							if (node && node.nodeType === 1) {
+								discover(node);
+							}
+						});
+						Array.from(mutation.removedNodes || []).forEach((node) => {
+							if (node && node.nodeType === 1) {
+								cleanupRemoved(node);
+							}
+						});
 					});
 				});
-			});
-			mutationObserver.observe(browserDocument.body, {childList: true, subtree: true});
-		}
+				mutationObserver.observe(browserDocument.body, {childList: true, subtree: true});
+			}
+		} catch {}
 	}
 
 	function onPageHide() {
+		activeForms.forEach((form) => {
+			const state = states.get(form);
+			if (state) {
+				flushValidation(state);
+			}
+		});
 		activeForms.forEach((form) => abandon(form, states.get(form)));
 		flush(true);
 	}

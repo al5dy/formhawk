@@ -1,4 +1,6 @@
 /.git
+/.gitattributes
+/.gitignore
 /.github
 /.idea
 /.phpstan-cache
@@ -8,6 +10,12 @@
 /dist
 /tests
 /tools/phpstan-bootstrap.php
+/tools/benchmark-migration.php
+/.playwright-cli
+/output
+/coverage
+/test-results
+/playwright-report
 /AGENTS.md
 /phpcs.xml.dist
 /phpstan.neon.dist

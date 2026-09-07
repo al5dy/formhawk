@@ -21,6 +21,8 @@ $formhawk_tables = array(
 	$wpdb->prefix . 'formhawk_field_daily',
 	$wpdb->prefix . 'formhawk_placements',
 	$wpdb->prefix . 'formhawk_placement_daily',
+	$wpdb->prefix . 'formhawk_ingestion_budgets',
+	$wpdb->prefix . 'formhawk_dimensions',
 );
 
 foreach ( $formhawk_tables as $formhawk_table ) {
