@@ -352,15 +352,26 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 		queueEvent(eventFor(state, 'form_start'));
 	}
 
-	function interact(form, field) {
+	function rearm(state) {
+		// Completion belongs to the last request. Views, starts and field evidence
+		// still belong to this tracked instance for the entire page lifecycle.
+		if (state.completed && SERVER_PROVIDERS.has(state.meta.provider)) {
+			state.completed = false;
+		}
+	}
+
+	function interact(form, field, edited = false) {
 		const state = states.get(form);
-		if (!state || state.completed) {
+		if (!state) {
 			return;
 		}
 		const metadata = metadataCache.get(field);
 		if (!metadata) {
 			return;
 		}
+		// Providers may focus a reset form automatically; focus alone is not a new attempt.
+		if (edited) rearm(state);
+		if (state.completed) return;
 		ensureStarted(state);
 		state.lastField = metadata;
 		if (!state.interacted.has(metadata.key)) {
@@ -379,6 +390,7 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 		// A validation response leaves the form active, so a recent provider submit
 		// attempt must not suppress a real pagehide abandonment.
 		state.lastSubmitAt = 0;
+		state.inFlight = false;
 		// One browser friction report per form lifecycle; field friction once per key.
 		// This is structural deduplication, independent of provider evidence and timing.
 		const firstReport = !state.validationReported;
@@ -393,9 +405,11 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 
 	function validationFields(form, elements) {
 		const state = states.get(form);
-		if (!state || state.completed) {
+		if (!state) {
 			return;
 		}
+		rearm(state);
+		if (state.completed) return;
 		ensureStarted(state);
 		Array.from(elements || []).forEach((field) => {
 			const metadata = metadataCache.get(field);
@@ -413,10 +427,12 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 
 	function markComplete(form) {
 		const state = states.get(form);
-		if (state) {
+		if (state && state.inFlight) {
 			flushValidation(state);
+			state.inFlight = false;
 			state.completed = true;
-			state.abandoned = false;
+			state.lastSubmitAt = 0;
+			rotateSubmissionMarker(state.currentForm || form, state);
 		}
 	}
 
@@ -431,6 +447,7 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 		const state = states.get(form);
 		if (state && !state.completed) {
 			state.lastSubmitAt = 0;
+			state.inFlight = false;
 		}
 	}
 
@@ -498,22 +515,38 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 		});
 	}
 
+	function ensureSubmissionMarker(form, state) {
+		if (!config.outcomeAttribution || !SERVER_PROVIDERS.has(state.meta.provider)) return;
+		let marker = form.querySelector(`input[type="hidden"][name="${SUBMISSION_FIELD}"]`);
+		if (!state.submissionId) state.submissionId = opaqueSubmissionId(browserWindow);
+		if (!state.submissionId) {
+			// Never send the previous request's ID if secure randomness becomes unavailable.
+			if (marker) marker.remove();
+			return;
+		}
+		if (!marker) {
+			marker = browserDocument.createElement('input');
+			marker.setAttribute('type', 'hidden');
+			marker.setAttribute('name', SUBMISSION_FIELD);
+			form.appendChild(marker);
+		}
+		// The attribute also updates the reset default, so provider form.reset() is safe.
+		marker.setAttribute('value', state.submissionId);
+		marker.setAttribute('data-formhawk-technical', 'submission-link');
+	}
+
+	function rotateSubmissionMarker(form, state) {
+		if (state.inFlight) return;
+		state.submissionId = '';
+		ensureSubmissionMarker(form, state);
+	}
+
 	function attachForm(form, state) {
 		states.set(form, state);
 		cacheFields(form);
 		activeForms.add(form);
 		state.currentForm = form;
-		if (config.outcomeAttribution && SERVER_PROVIDERS.has(state.meta.provider) && !technicalHiddenAttribute(form, SUBMISSION_FIELD)) {
-			const publicId = opaqueSubmissionId(browserWindow);
-			if (publicId) {
-				const marker = browserDocument.createElement('input');
-				marker.setAttribute('type', 'hidden');
-				marker.setAttribute('name', SUBMISSION_FIELD);
-				marker.setAttribute('value', publicId);
-				marker.setAttribute('data-formhawk-technical', 'submission-link');
-				form.appendChild(marker);
-			}
-		}
+		ensureSubmissionMarker(form, state);
 		if (!state.viewed) {
 			if (intersectionObserver) {
 				intersectionObserver.observe(form);
@@ -524,16 +557,20 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 		}
 
 		form.addEventListener('focusin', (event) => interact(form, event.target), true);
-		form.addEventListener('input', (event) => interact(form, event.target), true);
-		form.addEventListener('change', (event) => interact(form, event.target), true);
+		form.addEventListener('input', (event) => interact(form, event.target, true), true);
+		form.addEventListener('change', (event) => interact(form, event.target, true), true);
 		form.addEventListener('invalid', (event) => validationFields(form, [event.target]), true);
 		form.addEventListener('submit', () => {
 			const current = states.get(form);
-			if (!current || current.completed || Date.now() - current.lastSubmitAt < 750) {
+			if (!current) return;
+			flushValidation(current);
+			if (current.inFlight || (current.completed && !SERVER_PROVIDERS.has(current.meta.provider))) {
 				return;
 			}
-			flushValidation(current);
+			rearm(current);
+			ensureSubmissionMarker(form, current);
 			ensureStarted(current);
+			current.inFlight = true;
 			current.lastSubmitAt = Date.now();
 			queueEvent(eventFor(current, 'form_submit', {
 				duration_ms: current.startedAt ? Math.min(3600000, Math.max(0, Date.now() - current.startedAt)) : 0,
@@ -558,6 +595,8 @@ export function createTracker(browserWindow, browserDocument, suppliedConfig = {
 				started: false,
 				startedAt: 0,
 				completed: false,
+				inFlight: false,
+				submissionId: '',
 				lastSubmitAt: 0,
 				abandoned: false,
 				lastField: null,

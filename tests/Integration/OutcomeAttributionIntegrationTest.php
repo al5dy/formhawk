@@ -16,7 +16,7 @@ use Formhawk\Outcomes\SubmissionContext;
 use Formhawk\Tests\Fixtures\IsolatedStorageTestCase;
 
 final class OutcomeAttributionIntegrationTest extends IsolatedStorageTestCase {
-	private function submission( $suffix = 'AAAAAAAAAAAAAAAAAAAAAA' ) {
+	private function submission( $suffix = 'AAAAAAAAAAAAAAAAAAAAAA', $provider_entry_id = '991' ) {
 		$identity = ( new FormRepository() )->resolve(
 			array(
 				'provider'         => 'wpforms',
@@ -32,7 +32,7 @@ final class OutcomeAttributionIntegrationTest extends IsolatedStorageTestCase {
 				'placement_id'      => $identity['placement_id'],
 				'provider'          => 'wpforms',
 				'provider_form_id'  => '55',
-				'provider_entry_id' => '991',
+				'provider_entry_id' => $provider_entry_id,
 				'experiment_id'     => 0,
 				'variant_id'        => 0,
 				'device_class'      => 'mobile',
@@ -54,6 +54,68 @@ final class OutcomeAttributionIntegrationTest extends IsolatedStorageTestCase {
 				),
 			)
 		);
+	}
+
+	public function test_provider_retries_are_idempotent_but_independent_ids_keep_distinct_entries() {
+		global $wpdb;
+		$public_id_a = OutcomeManager::generate_submission_id();
+		$public_id_b = OutcomeManager::generate_submission_id();
+		$this->assertNotSame( $public_id_a, $public_id_b );
+		$first = $this->submission( substr( $public_id_a, 3 ), '991' );
+		$this->assertIsArray( $first );
+		$previous = $wpdb->suppress_errors();
+		try {
+			$retry = $this->submission( substr( $public_id_a, 3 ), '991' );
+		} finally {
+			$wpdb->suppress_errors( $previous );
+		}
+		$this->assertSame( $first, $retry );
+		$this->assertSame( '1', $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', Database::submissions_table() ) ) );
+		$second = $this->submission( substr( $public_id_b, 3 ), '992' );
+		$this->assertIsArray( $second );
+		$this->assertNotSame( $first['id'], $second['id'] );
+		$this->assertSame( array( '991', '992' ), $wpdb->get_col( $wpdb->prepare( 'SELECT provider_entry_id FROM %i ORDER BY id', Database::submissions_table() ) ) );
+		$this->assertSame( '2', $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', Database::submissions_table() ) ) );
+		$this->assertSame( '2', $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i WHERE outcome_type=%s', Database::outcomes_table(), 'submitted' ) ) );
+		$this->assertSame( '4', $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', Database::submission_fields_table() ) ) );
+	}
+
+	public function test_reused_public_id_with_a_different_nonempty_provider_entry_is_a_conflict() {
+		global $wpdb;
+		$first    = $this->submission();
+		$previous = $wpdb->suppress_errors();
+		try {
+			$conflict = $this->submission( 'AAAAAAAAAAAAAAAAAAAAAA', '992' );
+		} finally {
+			$wpdb->suppress_errors( $previous );
+		}
+		$this->assertInstanceOf( '\WP_Error', $conflict );
+		$this->assertSame( 'formhawk_submission_conflict', $conflict->get_error_code() );
+		$this->assertSame( 409, $conflict->get_error_data()['status'] );
+		$this->assertSame( $first, ( new OutcomeRepository() )->submission( $first['public_id'] ) );
+		$this->assertSame( '1', $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', Database::submissions_table() ) ) );
+		$details = $wpdb->get_var( $wpdb->prepare( 'SELECT details_json FROM %i WHERE event_type=%s', Database::business_audit_table(), 'submission_conflict' ) );
+		$this->assertSame(
+			array(
+				'provider' => 'wpforms',
+				'form_id'  => (int) $first['form_id'],
+				'reason'   => 'provider_entry_mismatch',
+			),
+			json_decode( $details, true )
+		);
+	}
+
+	public function test_missing_provider_entry_ids_remain_valid_idempotent_retries() {
+		global $wpdb;
+		$first    = $this->submission( 'AAAAAAAAAAAAAAAAAAAAAA', '' );
+		$previous = $wpdb->suppress_errors();
+		try {
+			$retry = $this->submission( 'AAAAAAAAAAAAAAAAAAAAAA', '' );
+		} finally {
+			$wpdb->suppress_errors( $previous );
+		}
+		$this->assertIsArray( $first );
+		$this->assertSame( $first, $retry );
 	}
 
 	public function test_append_only_transitions_are_idempotent_and_revenue_adjustments_do_not_duplicate() {

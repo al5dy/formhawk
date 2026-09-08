@@ -113,6 +113,8 @@ Field metadata is captured on discovery, before later interaction can personaliz
 
 Temporary deduplication lives only in page memory. Browser/provider validation signals are not matched by time. A zero-delay task coalesces fields for transport; lifecycle/field sets determine deduplication. Pending validation is flushed before terminal state/pagehide. Fetch/beacon failures do not change submission behavior. Missing/throwing observer constructors degrade to discovery fallback/manual refresh. Dynamic fields require discovery or explicit `Formhawk.refresh()` when MutationObserver is unavailable.
 
+From 0.5.1, a provider terminal state completes one request rather than permanently disabling the DOM form. The next independent submit records another attempt without another view/start; in-flight duplicate submits remain deduplicated until a provider result or validation retry. A completed request does not cause abandonment on pagehide or provider reset/focus. New edits/validation can make the form active again. Field ROI rotates only the per-submission marker after terminal completion; experiment assignment remains unchanged. See [the submission lifecycle contract](FIELD-ROI.md#submission-lifecycle-051).
+
 ## Verification commands
 
 Use disposable WordPress databases. PHPUnit includes real REST/SQL/migration tests; concurrency workers use eight independent processes. See `docs/MIGRATIONS.md` for restart/recovery and benchmark commands.

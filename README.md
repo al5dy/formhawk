@@ -22,6 +22,8 @@ Formhawk stores aggregate analytics in your WordPress database to help identify 
 
 Generic HTML submissions are observed browser attempts; provider-confirmed successes are separate evidence. See the [provider support matrix](docs/PROVIDER-SUPPORT.md) for capabilities, tested versions and remaining validation work.
 
+Version 0.5.1 fixes repeated AJAX submissions from the same CF7, WPForms or Elementor form being merged into one Field ROI submission. Each terminal request prepares a fresh opaque ID for the next independent submission; retries retain their ID. Browser and CRO attempts can repeat while views, starts and experiment assignment remain scoped to the page lifecycle. No database migration is required. Previously merged submissions cannot be reconstructed from Formhawk aggregates.
+
 ## Privacy
 
 Core analytics use daily aggregates, without submitted field values, analytics cookies, persistent visitor/session identifiers or external Formhawk analytics transmission. Field ROI adds only a cryptographically random per-submission linkage, structural field metadata and time-bounded outcome/value records; no visitor form value or raw CRM payload is stored. See [Field ROI architecture](docs/FIELD-ROI.md) and [readme.txt](readme.txt).
@@ -72,7 +74,7 @@ npm run build
 npm run build:release
 ```
 
-The installable archive is `dist/formhawk-0.5.0.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
+The installable archive is `dist/formhawk-0.5.1.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
 
 ## Project documentation
 

@@ -1,6 +1,8 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import trackerSource from '../../resources/js/tracker/index.js?raw';
 import {createTracker, detectProvider, eligible, fieldMeta, opaqueSubmissionId} from '../../resources/js/tracker/index.js';
+import {createExperimentTracker} from '../../resources/js/cro/experiment-tracker.js';
+import {installContextMarker} from '../../resources/js/cro/variant-engine.js';
 
 function form(html) {
 	document.body.innerHTML = html;
@@ -8,7 +10,7 @@ function form(html) {
 }
 
 function decodedEvents(fetchMock) {
-	return fetchMock.mock.calls.flatMap((call) => JSON.parse(call[1].body).events);
+	return fetchMock.mock.calls.flatMap((call) => JSON.parse(call[1].body).events || []);
 }
 
 function installJQueryEventFacade() {
@@ -169,6 +171,186 @@ describe('tracker lifecycle, deduplication, and privacy', () => {
 		trackers.push(instance);
 		return instance;
 	}
+
+	const ajaxProviders = [
+		{provider: 'wpforms', markup: '<form class="wpforms-form" data-formid="42"><input name="wpforms[fields][1]"></form>', success: 'wpformsAjaxSubmitSuccess', retry: 'wpformsAjaxSubmitFailed'},
+		{provider: 'elementor', markup: '<form class="elementor-form"><input type="hidden" name="post_id" value="81"><input type="hidden" name="form_id" value="widget"><input name="form_fields[email]"></form>', success: 'submit_success', retry: 'error'},
+		{provider: 'cf7', markup: '<div class="wpcf7" data-wpcf7-id="17"><form><input name="your-name"></form></div>', success: 'wpcf7mailsent', retry: 'wpcf7invalid'},
+	];
+	const submit = (element) => element.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+	const outcome = (element, type) => {
+		const target = element.closest('.wpcf7') || element;
+		target.dispatchEvent(new CustomEvent(type, {bubbles: true}));
+		if (type.startsWith('wpcf7')) {
+			// CF7 dispatches the specific result followed by wpcf7submit, then resets.
+			const statuses = {wpcf7mailsent: 'mail_sent', wpcf7mailfailed: 'mail_failed', wpcf7spam: 'spam', wpcf7aborted: 'aborted', wpcf7invalid: 'validation_failed'};
+			target.dispatchEvent(new CustomEvent('wpcf7submit', {bubbles: true, detail: {status: statuses[type]}}));
+		}
+	};
+	const submissionId = (element) => element.querySelector('[name="_formhawk_submission"]')?.getAttribute('value');
+
+	it.each(ajaxProviders)('$provider gives successive AJAX submissions distinct opaque IDs without repeating views/starts', ({provider, markup, success}) => {
+		installJQueryEventFacade();
+		const element = form(markup);
+		const instance = tracker({endpoint: '/events', token: 'public', outcomeAttribution: true});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		const cro = createExperimentTracker(window, document, '/cro-events');
+		trackers.push(cro);
+		installContextMarker(element, 'original.variant.context');
+		cro.attach(element, {provider, context: 'original.variant.context'});
+		const input = element.querySelector('input:not([type="hidden"])');
+		Object.defineProperty(input, 'value', {get() { throw new Error('Analytics read a visitor value'); }});
+		const sentIds = [];
+		// Observe the technical marker at the provider's submission boundary.
+		element.addEventListener('submit', () => sentIds.push(submissionId(element)));
+		const firstId = submissionId(element);
+		submit(element);
+		expect(submissionId(element)).toBe(firstId);
+		outcome(element, success);
+		const secondId = submissionId(element);
+		expect(secondId).not.toBe(firstId);
+		outcome(element, success);
+		expect(submissionId(element)).toBe(secondId);
+		element.reset();
+		input.dispatchEvent(new Event('focusin', {bubbles: true}));
+		window.dispatchEvent(new Event('pagehide'));
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_abandon')).toHaveLength(0);
+		submit(element);
+		outcome(element, success);
+		outcome(element, success);
+		window.dispatchEvent(new Event('pagehide'));
+		instance.flush();
+		expect(sentIds).toEqual([firstId, secondId]);
+		[firstId, secondId, submissionId(element)].forEach((id) => expect(id).toMatch(/^fh_[A-Za-z0-9_-]{22}$/));
+		expect(new Set([firstId, secondId, submissionId(element)]).size).toBe(3);
+		expect(element.querySelectorAll('input[type="hidden"][name="_formhawk_submission"][data-formhawk-technical="submission-link"]')).toHaveLength(1);
+		const types = decodedEvents(fetchMock).map((event) => event.type);
+		expect(types.filter((type) => type === 'form_submit')).toHaveLength(2);
+		expect(types.filter((type) => type === 'form_view')).toHaveLength(1);
+		expect(types.filter((type) => type === 'form_start')).toHaveLength(1);
+		expect(types).not.toContain('form_abandon');
+		expect(JSON.stringify(decodedEvents(fetchMock))).not.toContain('fh_');
+		const croEvents = fetchMock.mock.calls.filter((call) => call[0] === '/cro-events').map((call) => JSON.parse(call[1].body));
+		expect(croEvents.map((event) => event.type)).toEqual(['view', 'start', 'attempt', 'latency', 'attempt', 'latency']);
+		expect(croEvents.every((event) => event.context === 'original.variant.context')).toBe(true);
+		expect(element.querySelector('[name="_formhawk_cro"]').getAttribute('value')).toBe('original.variant.context');
+	});
+
+	it.each([...ajaxProviders, {...ajaxProviders[0], retry: 'wpformsAjaxSubmitError'}])('$provider keeps the marker during in-flight duplicates and validation retries ($retry)', ({markup, success, retry}) => {
+		installJQueryEventFacade();
+		const element = form(markup);
+		tracker({endpoint: '/events', token: 'public', outcomeAttribution: true});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		const firstId = submissionId(element);
+		submit(element);
+		submit(element);
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2000);
+		submit(element);
+		expect(submissionId(element)).toBe(firstId);
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_submit')).toHaveLength(1);
+		outcome(element, retry);
+		outcome(element, retry);
+		expect(submissionId(element)).toBe(firstId);
+		submit(element);
+		expect(submissionId(element)).toBe(firstId);
+		outcome(element, success);
+		const nextId = submissionId(element);
+		expect(nextId).not.toBe(firstId);
+		outcome(element, retry);
+		outcome(element, success);
+		expect(submissionId(element)).toBe(nextId);
+		window.dispatchEvent(new Event('pagehide'));
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_submit')).toHaveLength(2);
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_abandon')).toHaveLength(0);
+	});
+
+	it.each(['wpcf7mailfailed', 'wpcf7spam', 'wpcf7aborted'])('rotates once after CF7 terminal %s and allows the next submission', (terminal) => {
+		const element = form(ajaxProviders[2].markup);
+		tracker({endpoint: '/events', token: 'public', outcomeAttribution: true});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		const firstId = submissionId(element);
+		submit(element);
+		outcome(element, terminal);
+		const secondId = submissionId(element);
+		expect(secondId).not.toBe(firstId);
+		outcome(element, terminal);
+		expect(submissionId(element)).toBe(secondId);
+		submit(element);
+		outcome(element, 'wpcf7mailsent');
+		window.dispatchEvent(new Event('pagehide'));
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_submit')).toHaveLength(2);
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_abandon')).toHaveLength(0);
+	});
+
+	it('keeps generic forms outside Field ROI attribution', () => {
+		const element = form('<form id="plain"><input name="email"></form>');
+		tracker({endpoint: '/events', token: 'public', outcomeAttribution: true});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		submit(element);
+		expect(submissionId(element)).toBeUndefined();
+	});
+
+	it('preserves in-flight correlation across dynamic replacement and isolates another instance', () => {
+		installJQueryEventFacade();
+		const first = form(ajaxProviders[0].markup);
+		const instance = tracker({endpoint: '/events', token: 'public', outcomeAttribution: true});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		const firstId = submissionId(first);
+		submit(first);
+		const replacement = first.cloneNode(true);
+		first.replaceWith(replacement);
+		instance.refresh();
+		expect(submissionId(replacement)).toBe(firstId);
+		submit(replacement);
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_submit')).toHaveLength(1);
+		const secondInstance = replacement.cloneNode(true);
+		document.body.appendChild(secondInstance);
+		instance.refresh();
+		const independentId = submissionId(secondInstance);
+		expect(independentId).not.toBe(firstId);
+		outcome(replacement, 'wpformsAjaxSubmitSuccess');
+		expect(submissionId(replacement)).not.toBe(firstId);
+		expect(submissionId(secondInstance)).toBe(independentId);
+		submit(replacement);
+		outcome(replacement, 'wpformsAjaxSubmitSuccess');
+		submit(secondInstance);
+		outcome(secondInstance, 'wpformsAjaxSubmitSuccess');
+		window.dispatchEvent(new Event('pagehide'));
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_view')).toHaveLength(2);
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_submit')).toHaveLength(3);
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_abandon')).toHaveLength(0);
+	});
+
+	it('never reuses the completed marker if secure randomness fails during rotation', () => {
+		installJQueryEventFacade();
+		const element = form(ajaxProviders[0].markup);
+		tracker({endpoint: '/events', token: 'public', outcomeAttribution: true});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		submit(element);
+		vi.spyOn(window.crypto, 'getRandomValues').mockImplementation(() => { throw new Error('Unavailable'); });
+		outcome(element, 'wpformsAjaxSubmitSuccess');
+		expect(submissionId(element)).toBeUndefined();
+		submit(element);
+		expect(submissionId(element)).toBeUndefined();
+		expect(decodedEvents(fetchMock).filter((event) => event.type === 'form_submit')).toHaveLength(2);
+	});
+
+	it('tracks editing and native validation after success without repeating instance evidence', () => {
+		installJQueryEventFacade();
+		const element = form(ajaxProviders[0].markup);
+		tracker({endpoint: '/events', token: 'public', outcomeAttribution: true});
+		document.dispatchEvent(new Event('DOMContentLoaded'));
+		submit(element);
+		outcome(element, 'wpformsAjaxSubmitSuccess');
+		const nextId = submissionId(element);
+		const input = element.querySelector('input:not([type="hidden"])');
+		['focusin', 'input', 'change', 'input', 'invalid'].forEach((type) => input.dispatchEvent(new Event(type, {bubbles: true})));
+		window.dispatchEvent(new Event('pagehide'));
+		window.dispatchEvent(new Event('pagehide'));
+		expect(submissionId(element)).toBe(nextId);
+		const types = decodedEvents(fetchMock).map((event) => event.type);
+		['form_view', 'form_start', 'form_submit', 'field_interaction', 'client_validation_failure', 'form_abandon'].forEach((type) => expect(types.filter((observed) => observed === type)).toHaveLength(1));
+	});
 
 	it('preserves pending validation evidence when a terminal event arrives before the coalescing task', () => {
 		const element = form('<form id="pending"><input name="email" required></form>');
@@ -387,11 +569,14 @@ describe('tracker lifecycle, deduplication, and privacy', () => {
 		element.querySelector('input').dispatchEvent(new Event('focusin', {bubbles: true}));
 		element.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
 		element.dispatchEvent(new CustomEvent('wpformsAjaxSubmitSuccess', {bubbles: true}));
+		element.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+		element.dispatchEvent(new CustomEvent('wpformsAjaxSubmitSuccess', {bubbles: true}));
 		window.dispatchEvent(new Event('pagehide'));
 		trackerInstance.flush();
 		const events = decodedEvents(fetchMock);
-		expect(trackerInstance.stateFor(element).completed).toBe(true);
-		expect(events.filter((event) => event.type === 'form_submit')).toHaveLength(1);
+		expect(events.filter((event) => event.type === 'form_view')).toHaveLength(1);
+		expect(events.filter((event) => event.type === 'form_start')).toHaveLength(1);
+		expect(events.filter((event) => event.type === 'form_submit')).toHaveLength(2);
 		expect(events.filter((event) => event.type === 'form_abandon')).toHaveLength(0);
 	});
 

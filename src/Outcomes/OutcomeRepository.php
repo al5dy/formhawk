@@ -48,6 +48,21 @@ final class OutcomeRepository {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- End a duplicate or failed attribution attempt.
 			$wpdb->query( 'ROLLBACK' );
 			$existing = $this->submission( $public_id );
+			if ( $existing && ! empty( $existing['provider_entry_id'] ) && ! empty( $data['provider_entry_id'] ) && (string) $existing['provider_entry_id'] !== (string) $data['provider_entry_id'] ) {
+				// Different provider entries cannot be a retry of the same lead. Keep
+				// the original immutable and retain only structural conflict evidence.
+				$this->audit(
+					'submission_conflict',
+					'submission',
+					$public_id,
+					array(
+						'provider' => $data['provider'],
+						'form_id'  => $data['form_id'],
+						'reason'   => 'provider_entry_mismatch',
+					)
+				);
+				return new \WP_Error( 'formhawk_submission_conflict', __( 'The submission ID was already used for a different provider entry.', 'formhawk' ), array( 'status' => 409 ) );
+			}
 			return $existing ? $existing : new \WP_Error( 'formhawk_submission_storage', __( 'Submission attribution could not be stored.', 'formhawk' ) );
 		}
 		$submission_id = (int) $wpdb->insert_id;

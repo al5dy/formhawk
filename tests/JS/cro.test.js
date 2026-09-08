@@ -1,6 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import autopilotSource from '../../resources/js/cro/autopilot.js?raw';
 import engineSource from '../../resources/js/cro/variant-engine.js?raw';
+import experimentTrackerSource from '../../resources/js/cro/experiment-tracker.js?raw';
 import {applyVariant, classifyField, inspectForm, installContextMarker} from '../../resources/js/cro/variant-engine.js';
 import {createAutopilot, identity} from '../../resources/js/cro/autopilot.js';
 import {createExperimentTracker} from '../../resources/js/cro/experiment-tracker.js';
@@ -13,8 +14,9 @@ describe('CRO privacy and identity', () => {
 	beforeEach(() => { document.documentElement.className = ''; document.body.innerHTML = ''; });
 
 	it('does not use browser persistence, cookies, fingerprints, or serialize form payloads', () => {
-		const source = `${autopilotSource}\n${engineSource}`;
+		const source = `${autopilotSource}\n${engineSource}\n${experimentTrackerSource}`;
 		expect(source).not.toMatch(/localStorage|sessionStorage|indexedDB|document\.cookie|canvas|FormData|navigator\.userAgent/);
+		expect(experimentTrackerSource).not.toMatch(/\.value\b|preventDefault\s*\(/);
 	});
 
 	it('uses stable provider identities', () => {
@@ -152,6 +154,32 @@ describe('runtime mutations', () => {
 });
 
 describe('Autopilot lifecycle', () => {
+	it.each(['wpforms', 'elementor', 'cf7'])('tracks two successful %s attempts with stable experiment context and no false abandon', (provider) => {
+		document.body.innerHTML = '<form><input name="email"><button type="submit">Submit</button></form>';
+		window.fetch = vi.fn(() => Promise.resolve({ok: true}));
+		const tracker = createExperimentTracker(window, document, '/events');
+		const form = document.querySelector('form');
+		installContextMarker(form, 'signed.context');
+		tracker.attach(form, assignment(provider, []));
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			form.dispatchEvent(new Event('submit', {bubbles: true}));
+			form.dispatchEvent(new Event('submit', {bubbles: true}));
+			tracker.terminal(form, true);
+			tracker.terminal(form, true);
+			tracker.terminal(form, false);
+			window.dispatchEvent(new Event('pagehide'));
+		}
+		const events = window.fetch.mock.calls.map((call) => JSON.parse(call[1].body));
+		expect(events.filter((event) => event.type === 'attempt')).toHaveLength(2);
+		expect(events.filter((event) => event.type === 'latency')).toHaveLength(2);
+		expect(events.filter((event) => event.type === 'view')).toHaveLength(1);
+		expect(events.filter((event) => event.type === 'start')).toHaveLength(1);
+		expect(events.filter((event) => event.type === 'abandon')).toHaveLength(0);
+		expect(events.every((event) => event.context === 'signed.context')).toBe(true);
+		expect(form.querySelector('[name="_formhawk_cro"]').getAttribute('value')).toBe('signed.context');
+		tracker.destroy();
+	});
+
 	it('applies a deterministic runtime assignment and tracks it', async () => {
 		document.body.innerHTML = '<form data-formhawk-id="42"><input name="email" value="business@example.test"><button type="submit">Submit</button></form>';
 		const before = Array.from(new FormData(document.querySelector('form')).entries());

@@ -4,7 +4,7 @@ Tags: form analytics, field roi, contact form 7, wpforms, lead attribution
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.5.0
+Stable tag: 0.5.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -218,7 +218,7 @@ decline is not treated as terminal harm by itself: a useful qualifier may reduce
 volume while increasing value per visitor. Provider failures, validation, JavaScript
 errors and latency remain hard guardrails. Delayed business-outcome regression is
 reported in immutable evidence history; automatic post-promotion rollback on that
-delayed signal is not included in 0.5.0.
+delayed signal is not included in 0.5.1.
 
 Choose Observe, Approve or Full Autopilot mode. Approve is the safe default. The
 form detail screen explains the opportunity, live result, evidence, optimization
@@ -259,6 +259,11 @@ For supported provider-confirmed submissions, Field ROI creates one cryptographi
 random opaque `fh_…` submission ID. It contains no email, phone, user ID, IP or
 fingerprint, is scoped to that submission, is removed from provider payloads before
 entry/mail processing, and exists only to attach later business outcomes.
+
+Repeated AJAX submissions from the same form receive separate IDs after the
+previous terminal response. In-flight requests and validation/error retries keep
+their existing ID. Form views, starts and the CRO experiment arm remain scoped
+to the current page lifecycle; each new submission can record its own attempt.
 
 Field ROI stores only structural field presence/requiredness, provider structural
 IDs, outcome transitions, integer minor-unit value, ISO currency and a hash of an
@@ -612,6 +617,15 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 
 == Changelog ==
 
+= 0.5.1 =
+
+* Fixed repeated AJAX submissions from the same Contact Form 7, WPForms or Elementor form being silently merged into one Field ROI submission.
+* Rotate the cryptographic submission marker once after a terminal provider response, preserving request/retry idempotency and the existing unique database constraint.
+* Re-arm browser and CRO submit tracking after completion without duplicate views, starts, experiment reassignment or false abandonment on page exit.
+* Preserve validation/error retries, dynamic form replacement and independent form instances without reading field values or adding browser persistence.
+* Report conflicting non-empty provider entry IDs as attribution conflicts with structural audit evidence, preserving the original submission.
+* Added repeated-success, callback/retry, privacy and real-database regression tests; rebuilt production JavaScript. Database schema remains version 6.
+
 = 0.5.0 =
 
 * Added Field ROI Business Value Intelligence with EVPV, qualified/won leads per visitor, outcome coverage, maturity diagnostics and deterministic recommendations.
@@ -675,3 +689,9 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 = 0.1.1 =
 
 * Initial public release of Formhawk.
+
+== Upgrade Notice ==
+
+= 0.5.1 =
+
+Critical fix: repeated AJAX submissions now keep separate Field ROI IDs. Clear page/CDN caches and reload open pages. No database migration. Previously merged submissions require reconciliation with provider/CRM records; Formhawk aggregates cannot reconstruct them.

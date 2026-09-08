@@ -40,6 +40,38 @@ Database schema version 6 adds:
 encoded base64url. It is not a visitor, browser, account or cross-site identifier.
 The frontend creates no fallback ID when secure randomness is unavailable.
 
+### Submission lifecycle (0.5.1)
+
+`_formhawk_submission` belongs to one logical provider submission. The tracker
+creates it on attachment and preserves it while a request is in flight, including
+duplicate submit events. CF7 `wpcf7mailsent`, `wpcf7mailfailed`, `wpcf7spam` and
+`wpcf7aborted`, WPForms `wpformsAjaxSubmitSuccess`, and Elementor `submit_success`
+complete the attempt and prepare a new cryptographically random marker for the
+next independent submission. Duplicate terminal callbacks do not rotate it again.
+CF7 `wpcf7invalid`, WPForms failed/error responses and Elementor `error` allow a
+retry with the same marker. Provider resets retain the prepared marker; dynamic
+replacement of an in-flight form retains that request's marker.
+
+Completion suppresses abandonment until a new edit, validation attempt or submit.
+The next submit records new browser/CRO attempt evidence. Views, starts, field
+interaction/validation deduplication and the `_formhawk_cro` experiment assignment
+remain scoped to the tracked instance/page lifecycle. Generic HTML remains
+ineligible for Field ROI.
+
+The unique `public_id` constraint remains the server retry boundary. Independent
+IDs create separate rows and preserve their own provider entry IDs. Reuse with
+different non-empty provider entry IDs returns `formhawk_submission_conflict`
+(status 409) and records `submission_conflict` in the existing business audit
+with only provider, structural form ID and `provider_entry_mismatch` reason.
+Neither entry ID nor form content is added to the audit. The original submission
+is preserved and the customer's provider submission is not blocked. When entry
+IDs are absent, the server cannot distinguish a reused browser marker from a
+legitimate retry.
+
+Schema version remains 6. This fix prevents future merging; no historical rows
+are fabricated. Recovering earlier undercounts requires separate provider/CRM
+reconciliation. Clear caches serving old assets and reload already-open pages.
+
 ## Outcomes and value
 
 Canonical states are `submitted`, `qualified`, `unqualified`, `won`, `lost`,
@@ -255,13 +287,13 @@ Actions:
 Arguments contain opaque IDs, structural IDs, aggregate metrics or canonical
 outcomes. Formhawk never adds submitted values to these hooks.
 
-## Known boundaries in 0.5.0
+## Known boundaries in 0.5.1
 
 - Generic HTML forms have no universal provider-confirmed success and are not
   eligible for outcome attribution or Field ROI claims.
 - Optional-field “supplied versus skipped” cohorts are not inferred because the
   privacy contract forbids reading values. Provider-native presence/requiredness
-  experiments are not shipped in 0.5.0; Formhawk will not simulate them by only
+  experiments are not shipped in 0.5.1; Formhawk will not simulate them by only
   changing browser validation while the server schema remains unchanged.
 - Structural schema snapshots are collected at confirmed submission. They are not
   yet sufficient for adjusted quasi-experimental EVPV and are not presented as such.
@@ -269,7 +301,7 @@ outcomes. Formhawk never adds submitted values to these hooks.
   arbitrary query string or persistent identity is stored.
 - Automated provider form-definition promotion remains limited to existing safe,
   reversible runtime Autopilot mutations. Provider definitions are never rewritten.
-- Post-promotion monitoring in 0.5.0 retains technical/provider guardrails, but a
+- Post-promotion monitoring in 0.5.1 retains technical/provider guardrails, but a
   delayed business-outcome regression does not yet trigger an automatic rollback.
   The immutable decision history preserves the evidence for review.
 - No FX conversion is performed. Each currency is evaluated separately.

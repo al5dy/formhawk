@@ -53,6 +53,7 @@ Provider identifiers are namespaced by the Formhawk form key, so the same numeri
 - Browser validation friction and provider-confirmed validation rejections have separate form and field counters. Provider rejection share uses paired post-upgrade rejections + accepted submissions, never browser submit attempts. Browser friction has no failure percentage.
 - Provider adapters suppress repeated terminal hooks during the same server request.
 - The tracker suppresses repeated submit events, view/start/interaction repeats, rediscovery of the same node, and recreated Elementor popup instances.
+- Since 0.5.1, submit deduplication ends at a provider response: later independent submissions from the same AJAX form receive new attempt evidence and, after terminal completion, a new Field ROI marker. Views/starts and the experiment arm remain in the same page lifecycle. CF7 invalid, WPForms failed/error and Elementor error paths retain the marker for retry. See [Field ROI lifecycle](FIELD-ROI.md#submission-lifecycle-051).
 - WPForms blocking errors without a field ID increment the form-level validation-failure aggregate once; Formhawk does not fabricate a field dimension or retain the error message.
 - WPForms calls its initial-errors filter on successful submissions too. Empty errors and errors belonging to another form do not count as validation failures.
 - Elementor Pro 3.35.1 fires `elementor_pro/forms/mail_sent` before a failed `wp_mail()` result becomes a handler error. Formhawk therefore defers the separate mail-action metric until the post-action handler confirms the overall outcome, and never uses the hook as universal form success.
@@ -67,6 +68,15 @@ Frontend tracking never reads input `.value`. The only hidden input attributes r
 The public REST endpoint enforces origin checks when browser headers are available, a public routing token, strict JSON types/properties/nesting, body/event size caps, atomic request/event/cost budgets, CF7/WPForms form existence checks and site/per-form cardinality budgets. No limit uses an IP or visitor identifier. Defaults, configurable filters, evidence definitions and HTTP semantics are documented in [HARDENING.md](HARDENING.md).
 
 Labels are captured on discovery and use only the label's own text nodes; nested controls, output and dynamic descendants are excluded. Personalized labels changed after discovery are not re-read. Explicit metadata and page paths must remain structural.
+
+## 0.5.1 resubmission regression verification (2026-09-08)
+
+- Reproduced the original defect before implementation: 13 JS regressions failed, including unchanged markers for all three providers and missing second CRO attempts. A separate database regression reproduced silent acceptance of conflicting provider entry IDs.
+- 75 Vitest tests passed, including combined tracker/CRO provider callbacks, repeated successes, validation/error retries, delayed in-flight duplicate submits, provider reset/focus, dynamic replacement, simultaneous instances, secure-randomness failure and source/runtime privacy guards.
+- 132 PHPUnit tests / 1,233 assertions passed on both WordPress 7.1 / PHP 8.2.12 and WordPress 6.4 / PHP 7.4.33 in separate disposable databases. Repository tests preserve one row for retries and two distinct rows/entry IDs for independent IDs; conflicts preserve the original row and add only structural audit evidence.
+- An additional jsdom-to-PHP/WordPress database smoke passed for CF7, WPForms and Elementor: initial browser ID A, server row A, terminal callback, new browser ID B, server row B. Replaying either ID remained idempotent; views/starts stayed at one and no abandonment was emitted. Provider browser callbacks were simulated in this smoke; it is not a real-provider browser E2E test.
+- Verified terminal/reset/error order against installed Contact Form 7 6.1.7, WPForms Lite 2.0.1.1 and Elementor Pro 3.35.1 source. No new claim of WPForms Pro or Elementor Pro browser E2E coverage is made.
+- PHPCS/PHPCompatibility, ESLint, PHPStan, strict Composer validation, byte-identical rebuild and official Plugin Check on the unpacked release ZIP passed. Tracker: 11,872 bytes minified / 4,572 gzip; CRO bundle: 17,490 / 6,357 bytes. No new dependencies, polling, storage or external requests were added.
 
 ## Provider verification from the 0.2.0 development run
 

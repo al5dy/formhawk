@@ -29,7 +29,7 @@ export function createExperimentTracker(browserWindow, browserDocument, endpoint
 	function attach(form, assignment) {
 		bindJqueryProviderEvents();
 		if (!assignment.context || states.has(form)) return;
-		const state = {context: assignment.context, provider: assignment.provider, started: false, attempted: false, abandoned: false, validation: false, viewed: false, submittedAt: 0};
+		const state = {context: assignment.context, provider: assignment.provider, started: false, attempted: false, completed: false, abandoned: false, validation: false, viewed: false, submittedAt: 0};
 		states.set(form, state);
 		active.add(form);
 		const start = () => {
@@ -38,11 +38,15 @@ export function createExperimentTracker(browserWindow, browserDocument, endpoint
 				send(state.context, 'start');
 			}
 		};
-		form.addEventListener('focusin', start, {capture: true});
-		form.addEventListener('input', start, {capture: true});
-		form.addEventListener('change', start, {capture: true});
-		form.addEventListener('invalid', () => {
+		const edit = () => {
+			state.completed = false;
 			start();
+		};
+		form.addEventListener('focusin', start, {capture: true});
+		form.addEventListener('input', edit, {capture: true});
+		form.addEventListener('change', edit, {capture: true});
+		form.addEventListener('invalid', () => {
+			edit();
 			if (!state.validation) {
 				state.validation = true;
 				send(state.context, 'client_validation');
@@ -51,6 +55,7 @@ export function createExperimentTracker(browserWindow, browserDocument, endpoint
 		form.addEventListener('submit', () => {
 			if (state.attempted) return;
 			start();
+			state.completed = false;
 			state.attempted = true;
 			state.submittedAt = Date.now();
 			send(state.context, 'attempt');
@@ -61,10 +66,13 @@ export function createExperimentTracker(browserWindow, browserDocument, endpoint
 
 	function terminal(form, successful = true) {
 		const state = states.get(form);
-		if (!state || !state.submittedAt) return;
+		if (!state || !state.attempted) return;
 		send(state.context, 'latency', Date.now() - state.submittedAt);
 		state.submittedAt = 0;
-		if (!successful) state.attempted = false;
+		// Only an in-flight attempt accepts a terminal callback. A later submit
+		// re-arms it without changing the page's experiment assignment or start.
+		state.attempted = false;
+		state.completed = successful;
 	}
 
 	function providerForm(event) {
@@ -103,7 +111,7 @@ export function createExperimentTracker(browserWindow, browserDocument, endpoint
 
 	const pagehide = () => active.forEach((form) => {
 		const state = states.get(form);
-		if (state && state.started && !state.attempted && !state.abandoned) {
+		if (state && state.started && !state.attempted && !state.completed && !state.abandoned) {
 			state.abandoned = true;
 			send(state.context, 'abandon');
 		}
