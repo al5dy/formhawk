@@ -189,7 +189,7 @@ describe('tracker lifecycle, deduplication, and privacy', () => {
 	};
 	const submissionId = (element) => element.querySelector('[name="_formhawk_submission"]')?.getAttribute('value');
 
-	it.each(ajaxProviders)('$provider gives successive AJAX submissions distinct opaque IDs without repeating views/starts', ({provider, markup, success}) => {
+	it.each(ajaxProviders)('$provider gives successive AJAX submissions distinct opaque IDs without repeating views/starts', async ({provider, markup, success}) => {
 		installJQueryEventFacade();
 		const element = form(markup);
 		const instance = tracker({endpoint: '/events', token: 'public', outcomeAttribution: true});
@@ -230,6 +230,7 @@ describe('tracker lifecycle, deduplication, and privacy', () => {
 		expect(types.filter((type) => type === 'form_start')).toHaveLength(1);
 		expect(types).not.toContain('form_abandon');
 		expect(JSON.stringify(decodedEvents(fetchMock))).not.toContain('fh_');
+		await vi.waitFor(() => expect(fetchMock.mock.calls.filter((call) => call[0] === '/cro-events')).toHaveLength(6));
 		const croEvents = fetchMock.mock.calls.filter((call) => call[0] === '/cro-events').map((call) => JSON.parse(call[1].body));
 		expect(croEvents.map((event) => event.type)).toEqual(['view', 'start', 'attempt', 'latency', 'attempt', 'latency']);
 		expect(croEvents.every((event) => event.context === 'original.variant.context')).toBe(true);

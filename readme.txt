@@ -4,7 +4,7 @@ Tags: form analytics, field roi, contact form 7, wpforms, lead attribution
 Requires at least: 6.4
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.5.1
+Stable tag: 0.5.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -207,18 +207,21 @@ Safety remains the first constraint:
 * The original CF7, WPForms or Elementor form definition is never rewritten.
 * Required, conditional, legal, consent, payment, password, CAPTCHA, security and upload fields fail closed from structural experiments.
 * Contact Form 7, WPForms and Elementor winners use provider-confirmed conversions.
-* Generic HTML uses clearly labelled observed submit rate, not fake confirmation.
+* Generic HTML uses advisory observed submit rate, with manual decisions in Observe/Approve mode. It cannot autonomously promote a winner from browser reports.
 * Low-traffic experiments remain collecting; minimum sample, conversions and runtime all apply.
 * Harmful variants return new traffic to control automatically.
 * Promoted winners are monitored and can be rolled back automatically.
-* Assignment exists only for the current page lifecycle, with no cookie or browser storage.
+* Assignment is scoped to the current page/form lifecycle, with no cookie or browser storage. Short-lived hashed server state prevents unlimited event replay.
+* Server-issued assignments are counted before the browser can selectively report views; automatic decision rates use these assignments, not browser view reports.
 
 For Qualified Leads, Won Leads and Business Value objectives, a raw-submission
 decline is not treated as terminal harm by itself: a useful qualifier may reduce
-volume while increasing value per visitor. Provider failures, validation, JavaScript
-errors and latency remain hard guardrails. Delayed business-outcome regression is
+volume while increasing value per visitor. Server-confirmed provider failures and
+validation retain automatic guardrail authority. Browser JavaScript errors, client
+validation and latency request review; they cannot independently reject an
+experiment or roll back a baseline. Delayed business-outcome regression is
 reported in immutable evidence history; automatic post-promotion rollback on that
-delayed signal is not included in 0.5.1.
+delayed signal is not included in 0.5.2.
 
 Choose Observe, Approve or Full Autopilot mode. Approve is the safe default. The
 form detail screen explains the opportunity, live result, evidence, optimization
@@ -264,6 +267,16 @@ Repeated AJAX submissions from the same form receive separate IDs after the
 previous terminal response. In-flight requests and validation/error retries keep
 their existing ID. Form views, starts and the CRO experiment arm remain scoped
 to the current page lifecycle; each new submission can record its own attempt.
+
+CRO contexts use a random 128-bit assignment ID and signed issuance/expiry times.
+The server stores only its SHA-256 hash, structural attribution and bounded event
+state, not the raw token or a visitor profile. View, start, client validation,
+JavaScript error and abandonment are accepted at most once. Up to 50 sequenced
+submit attempts are allowed per context; observed submit and latency cannot be
+replayed into extra samples. Contexts expire after two hours by default (maximum
+24 hours), with expiry cleanup on issuance and every 15 minutes via WP-Cron.
+The registry is capped at 50,000 rows per site; failed admission preserves the
+original form. Hosts disabling WP-Cron should provide a regular system cron.
 
 Field ROI stores only structural field presence/requiredness, provider structural
 IDs, outcome transitions, integer minor-unit value, ISO currency and a hash of an
@@ -617,6 +630,16 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 
 == Changelog ==
 
+= 0.5.2 =
+
+* Security: replace replayable CRO contexts with signed v2 contexts, random assignment IDs, issuance timestamps and short-lived hashed server lifecycle storage.
+* Atomically deduplicate browser events and sequence up to 50 repeated AJAX attempts; latency and observed submits cannot exceed valid attempts.
+* Record server-issued assignments separately from browser views and use them for autonomous conversion and business-value decisions.
+* Make browser errors, client validation and latency advisory only; retain trusted provider guardrails and disable generic HTML autonomous promotion.
+* Add schema v7 with indexed expiry cleanup and bounded storage, preserving all historical aggregates. Older experiments remain manual-safe; no historical assignments are fabricated.
+* Harden explicit cross-site requests and add fixed-key integrity diagnostics without IPs, visitor identities or submitted field values.
+* Preserve the 0.5.1 repeated-submission fix, isolate multiple DOM instances and rebuild production assets with replay/concurrency/lifecycle regressions.
+
 = 0.5.1 =
 
 * Fixed repeated AJAX submissions from the same Contact Form 7, WPForms or Elementor form being silently merged into one Field ROI submission.
@@ -691,6 +714,10 @@ Enable the uninstall cleanup setting if you want Formhawk data removed when the 
 * Initial public release of Formhawk.
 
 == Upgrade Notice ==
+
+= 0.5.2 =
+
+Security update: CRO replay protection and trusted-only automatic decisions. Back up before schema v7 upgrade; clear caches and reload pages. Old experiments stay manual-safe. Generic HTML cannot auto-promote from browser reports. Historical polluted data is not rebuilt.
 
 = 0.5.1 =
 

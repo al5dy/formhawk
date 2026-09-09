@@ -7,8 +7,10 @@ import {createAutopilot, identity} from '../../resources/js/cro/autopilot.js';
 import {createExperimentTracker} from '../../resources/js/cro/experiment-tracker.js';
 
 function assignment(provider, mutations) {
-	return {provider, provider_form_id: '42', experiment_id: 1, variant_id: 2, context: 'signed.context', config: {mutations}};
+	return {form_index: 0, provider, provider_form_id: '42', experiment_id: 1, variant_id: 2, context: 'signed.context', config: {mutations}};
 }
+
+const drainEvents = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('CRO privacy and identity', () => {
 	beforeEach(() => { document.documentElement.className = ''; document.body.innerHTML = ''; });
@@ -154,7 +156,7 @@ describe('runtime mutations', () => {
 });
 
 describe('Autopilot lifecycle', () => {
-	it.each(['wpforms', 'elementor', 'cf7'])('tracks two successful %s attempts with stable experiment context and no false abandon', (provider) => {
+	it.each(['wpforms', 'elementor', 'cf7'])('tracks two successful %s attempts with stable experiment context and no false abandon', async (provider) => {
 		document.body.innerHTML = '<form><input name="email"><button type="submit">Submit</button></form>';
 		window.fetch = vi.fn(() => Promise.resolve({ok: true}));
 		const tracker = createExperimentTracker(window, document, '/events');
@@ -169,7 +171,10 @@ describe('Autopilot lifecycle', () => {
 			tracker.terminal(form, false);
 			window.dispatchEvent(new Event('pagehide'));
 		}
+		await drainEvents();
 		const events = window.fetch.mock.calls.map((call) => JSON.parse(call[1].body));
+		expect(events.filter((event) => event.type === 'attempt').map((event) => event.attempt)).toEqual([1, 2]);
+		expect(events.filter((event) => event.type === 'latency').map((event) => [event.attempt, event.successful])).toEqual([[1, true], [2, true]]);
 		expect(events.filter((event) => event.type === 'attempt')).toHaveLength(2);
 		expect(events.filter((event) => event.type === 'latency')).toHaveLength(2);
 		expect(events.filter((event) => event.type === 'view')).toHaveLength(1);
@@ -207,7 +212,19 @@ describe('Autopilot lifecycle', () => {
 		runtime.destroy();
 	});
 
-	it('deduplicates double submit and pagehide while preserving a real provider retry', () => {
+	it('fails open without an alternate arm token when an assigned mutation is unsafe', async () => {
+		document.body.innerHTML = '<form class="wpforms-form" data-formid="42"><div class="wpforms-field"><input name="email" required></div><button type="submit">Submit</button></form>';
+		window.fetch = vi.fn(async (url) => ({ok: true, json: async () => url === '/config' ? {assignments: [{...assignment('wpforms', [{type: 'unknown_mutation', config: {}}]), fallback_config: {mutations: []}, fallback_context: ''}]} : {}}));
+		const runtime = createAutopilot(window, document, {configEndpoint: '/config', eventsEndpoint: '/events'});
+		await drainEvents();
+		expect(document.querySelector('button').textContent).toBe('Submit');
+		expect(document.querySelector('[name="_formhawk_cro"]')).toBeNull();
+		const events = window.fetch.mock.calls.filter((call) => call[0] === '/events').map((call) => JSON.parse(call[1].body));
+		expect(events).toEqual([{context: 'signed.context', type: 'js_error'}]);
+		runtime.destroy();
+	});
+
+	it('deduplicates double submit and pagehide while preserving a real provider retry', async () => {
 		document.body.innerHTML = '<form class="wpforms-form" data-formid="42"><input name="wpforms[fields][1]"><button type="submit">Submit</button></form>';
 		const eventTypes = [];
 		window.fetch = vi.fn(async (url, options) => {
@@ -219,16 +236,78 @@ describe('Autopilot lifecycle', () => {
 		tracker.attach(form, assignment('wpforms', []));
 		form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
 		form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+		await drainEvents();
 		expect(eventTypes.filter((type) => type === 'attempt')).toHaveLength(1);
 		tracker.terminal(form, false);
 		form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+		await drainEvents();
 		expect(eventTypes.filter((type) => type === 'attempt')).toHaveLength(2);
 		tracker.terminal(form, false);
 
 		window.dispatchEvent(new PageTransitionEvent('pagehide'));
 		window.dispatchEvent(new PageTransitionEvent('pagehide'));
+		await drainEvents();
 		expect(eventTypes.filter((type) => type === 'abandon')).toHaveLength(1);
 		tracker.destroy();
+	});
+
+	it('serializes requests without blocking submits and caps per-context attempts', async () => {
+		document.body.innerHTML = '<form><input></form>';
+		let releaseView;
+		window.fetch = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { releaseView = resolve; })).mockResolvedValue({ok: true});
+		const form = document.querySelector('form');
+		const tracker = createExperimentTracker(window, document, '/events');
+		tracker.attach(form, assignment('wpforms', []));
+		for (let index = 0; index < 60; index += 1) {
+			const event = new Event('submit', {bubbles: true, cancelable: true});
+			form.dispatchEvent(event);
+			expect(event.defaultPrevented).toBe(false);
+			tracker.terminal(form, true);
+		}
+		expect(window.fetch).toHaveBeenCalledTimes(1);
+		releaseView({ok: true});
+		await drainEvents();
+		const events = window.fetch.mock.calls.map((call) => JSON.parse(call[1].body));
+		expect(events.slice(0, 6).map((event) => event.type)).toEqual(['view', 'start', 'attempt', 'latency', 'attempt', 'latency']);
+		expect(events.filter((event) => event.type === 'attempt')).toHaveLength(50);
+		expect(events.filter((event) => event.type === 'latency')).toHaveLength(50);
+		tracker.destroy();
+	});
+
+	it('emits a bounded resume only when editing after success, not on focus or pagehide', async () => {
+		document.body.innerHTML = '<form><input></form>';
+		window.fetch = vi.fn().mockResolvedValue({ok: true});
+		const form = document.querySelector('form');
+		const tracker = createExperimentTracker(window, document, '/events');
+		tracker.attach(form, assignment('wpforms', []));
+		form.dispatchEvent(new Event('submit', {bubbles: true}));
+		tracker.terminal(form, true);
+		form.dispatchEvent(new Event('focusin', {bubbles: true}));
+		window.dispatchEvent(new Event('pagehide'));
+		await drainEvents();
+		expect(window.fetch.mock.calls.map((call) => JSON.parse(call[1].body).type)).not.toContain('abandon');
+		form.dispatchEvent(new Event('input', {bubbles: true}));
+		form.dispatchEvent(new Event('change', {bubbles: true}));
+		window.dispatchEvent(new Event('pagehide'));
+		await drainEvents();
+		const events = window.fetch.mock.calls.map((call) => JSON.parse(call[1].body));
+		expect(events.filter((event) => event.type === 'resume')).toEqual([{context: 'signed.context', type: 'resume', attempt: 1}]);
+		expect(events.filter((event) => event.type === 'abandon')).toHaveLength(1);
+		tracker.destroy();
+	});
+
+	it('gives two DOM instances independent issued contexts and preserves each on resubmission', async () => {
+		document.body.innerHTML = '<form class="wpforms-form" data-formid="42"><button type="submit">Submit</button></form>'.repeat(2);
+		window.fetch = vi.fn(async (url, options) => ({ok: true, json: async () => url === '/config' ? {assignments: JSON.parse(options.body).forms.map((item, index) => ({...assignment(item.provider, []), form_index: index, context: `issued.${index}`}))} : {}}));
+		const runtime = createAutopilot(window, document, {configEndpoint: '/config', eventsEndpoint: '/events'});
+		await drainEvents();
+		const forms = Array.from(document.querySelectorAll('form'));
+		expect(forms.map((form) => form.querySelector('[name="_formhawk_cro"]').getAttribute('value'))).toEqual(['issued.0', 'issued.1']);
+		forms.forEach((form) => form.dispatchEvent(new Event('submit', {bubbles: true})));
+		await drainEvents();
+		const attempts = window.fetch.mock.calls.filter((call) => call[0] === '/events').map((call) => JSON.parse(call[1].body)).filter((event) => event.type === 'attempt');
+		expect(attempts.map((event) => [event.context, event.attempt])).toEqual([['issued.0', 1], ['issued.1', 1]]);
+		runtime.destroy();
 	});
 
 	it('applies to multiple dynamic instances and requests a new generic placement after SPA navigation', async () => {

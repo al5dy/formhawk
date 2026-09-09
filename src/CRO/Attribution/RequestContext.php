@@ -2,13 +2,17 @@
 
 namespace Formhawk\CRO\Attribution;
 
+use Formhawk\Contracts\CROContextStoreInterface;
+
 final class RequestContext {
 	const FIELD_NAME = '_formhawk_cro';
 	private $signer;
 	private $context;
+	private $contexts;
 
-	public function __construct( ContextSigner $signer = null ) {
-		$this->signer = $signer ? $signer : new ContextSigner();
+	public function __construct( ContextSigner $signer = null, CROContextStoreInterface $contexts = null ) {
+		$this->signer   = $signer ? $signer : new ContextSigner();
+		$this->contexts = $contexts ? $contexts : new ContextStore();
 	}
 
 	public function register() {
@@ -19,10 +23,9 @@ final class RequestContext {
 
 	public function capture() {
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Signed technical attribution marker, never visitor content.
-		$token = isset( $_POST[ self::FIELD_NAME ] ) ? wp_unslash( $_POST[ self::FIELD_NAME ] ) : '';
-		if ( is_scalar( $token ) ) {
-			$this->context = $this->signer->verify( (string) $token );
-		}
+		$token         = isset( $_POST[ self::FIELD_NAME ] ) ? wp_unslash( $_POST[ self::FIELD_NAME ] ) : '';
+		$context       = is_scalar( $token ) ? $this->signer->verify( (string) $token ) : null;
+		$this->context = $context && $this->contexts->is_issued( $context ) ? $context : null;
 		unset( $_POST[ self::FIELD_NAME ], $_REQUEST[ self::FIELD_NAME ] );
 	}
 

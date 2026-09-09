@@ -135,8 +135,9 @@ final class ExperimentRepository {
 				'policy_version'    => OptimizationPolicy::VERSION,
 				'created_at_utc'    => $now,
 				'updated_at_utc'    => $now,
+				'integrity_version' => 2,
 			),
-			array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
+			array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d' )
 		);
 		$experiment_id = $inserted ? (int) $wpdb->insert_id : 0;
 		if ( ! $experiment_id ) {
@@ -346,7 +347,7 @@ final class ExperimentRepository {
 		global $wpdb;
 		$sql = $wpdb->prepare(
 			'SELECT variant_id,
-				SUM(views) AS views, SUM(starts) AS starts, SUM(attempts) AS attempts,
+				SUM(assignments) AS assignments, SUM(views) AS views, SUM(starts) AS starts, SUM(attempts) AS attempts,
 				SUM(confirmed_successes) AS confirmed_successes, SUM(observed_submits) AS observed_submits, SUM(abandonments) AS abandonments,
 				SUM(client_validation_failures) AS client_validation_failures,
 				SUM(provider_validation_failures) AS provider_validation_failures,
@@ -369,7 +370,7 @@ final class ExperimentRepository {
 	public function aggregate_since( $experiment_id, $variant_id, $stat_date ) {
 		global $wpdb;
 		$sql = $wpdb->prepare(
-			'SELECT SUM(views) AS views, SUM(starts) AS starts, SUM(attempts) AS attempts,
+			'SELECT SUM(assignments) AS assignments, SUM(views) AS views, SUM(starts) AS starts, SUM(attempts) AS attempts,
 				SUM(confirmed_successes) AS confirmed_successes, SUM(observed_submits) AS observed_submits,
 				SUM(abandonments) AS abandonments, SUM(client_validation_failures) AS client_validation_failures,
 				SUM(provider_validation_failures) AS provider_validation_failures,
@@ -390,7 +391,7 @@ final class ExperimentRepository {
 	public function aggregate_by_segment( $experiment_id ) {
 		global $wpdb;
 		$sql = $wpdb->prepare(
-			'SELECT variant_id, segment, SUM(views) AS views, SUM(starts) AS starts, SUM(confirmed_successes) AS confirmed_successes,
+			'SELECT variant_id, segment, SUM(assignments) AS assignments, SUM(views) AS views, SUM(starts) AS starts, SUM(confirmed_successes) AS confirmed_successes,
 				SUM(observed_submits) AS observed_submits, SUM(provider_validation_failures) AS provider_validation_failures,
 				SUM(client_validation_failures) AS client_validation_failures,
 				SUM(provider_failures) AS provider_failures, SUM(mail_failures) AS mail_failures, SUM(js_errors) AS js_errors,
@@ -428,7 +429,7 @@ final class ExperimentRepository {
 
 	public function increment( $experiment_id, $variant_id, $segment, array $increments ) {
 		global $wpdb;
-		$allowed    = array( 'views', 'starts', 'attempts', 'confirmed_successes', 'observed_submits', 'abandonments', 'client_validation_failures', 'provider_validation_failures', 'provider_failures', 'mail_failures', 'js_errors', 'latency_total_ms', 'latency_samples' );
+		$allowed    = array( 'assignments', 'views', 'starts', 'attempts', 'confirmed_successes', 'observed_submits', 'abandonments', 'client_validation_failures', 'provider_validation_failures', 'provider_failures', 'mail_failures', 'js_errors', 'latency_total_ms', 'latency_samples' );
 		$increments = array_intersect_key( $increments, array_flip( $allowed ) );
 		if ( ! $increments || ! in_array( $segment, array( 'desktop', 'mobile' ), true ) ) {
 			return false;
@@ -467,6 +468,19 @@ final class ExperimentRepository {
 			array( '%s', '%s', '%s', '%s' ),
 			array( '%d' )
 		);
+	}
+
+	/** Bounded review flag: no attacker-controlled reason or repeated history entries. */
+	public function integrity_warning( $experiment_id, $reason ) {
+		global $wpdb;
+		if ( ! in_array( $reason, array( 'client_telemetry_review', 'legacy_experiment_review', 'confirmed_evidence_required' ), true ) ) {
+			return;
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- A single fixed review flag per experiment; duplicate evaluations do not inflate diagnostics.
+		$changed = $wpdb->query( $wpdb->prepare( 'UPDATE %i SET integrity_warning=%s WHERE id=%d AND integrity_warning<>%s', Database::experiments_table(), $reason, absint( $experiment_id ), $reason ) );
+		if ( $changed ) {
+			( new CRODiagnostics() )->increment( 'cro_integrity_warning' );
+		}
 	}
 
 	/** Atomically deploys a winner without ever editing the provider form. */

@@ -35,10 +35,11 @@ final class BusinessValueAutopilotIntegrationTest extends IsolatedStorageTestCas
 					'variant_id'          => $arm_id,
 					'stat_date'           => $stat_date,
 					'segment'             => 'desktop',
-					'views'               => 1000,
+					'views'               => $arm_id === $control_id ? 1000000 : 1,
+					'assignments'         => 1000,
 					'confirmed_successes' => $submissions,
 				),
-				array( '%d', '%d', '%s', '%s', '%d', '%d' )
+				array( '%d', '%d', '%s', '%s', '%d', '%d', '%d' )
 			);
 		}
 
@@ -96,9 +97,10 @@ final class BusinessValueAutopilotIntegrationTest extends IsolatedStorageTestCas
 		);
 		$result = ( new BusinessValueWinnerSelector() )->select(
 			array(
-				'id'             => $experiment_id,
-				'started_at_utc' => $stat_date . ' 00:00:00',
-				'primary_metric' => 'business_value',
+				'id'                => $experiment_id,
+				'started_at_utc'    => $stat_date . ' 00:00:00',
+				'primary_metric'    => 'business_value',
+				'integrity_version' => 2,
 			),
 			array(
 				array(

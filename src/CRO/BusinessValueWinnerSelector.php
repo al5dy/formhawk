@@ -31,6 +31,10 @@ final class BusinessValueWinnerSelector {
 			'expected_loss'          => null,
 			'metric'                 => 'business_value',
 		);
+		if ( (int) ( $experiment['integrity_version'] ?? 1 ) < 2 ) {
+			$result['reason'] = 'legacy_experiment_review';
+			return $result;
+		}
 		if ( count( $variants ) !== 2 ) {
 			$result['reason'] = 'corrupt_variant_configuration';
 			return $result; }
@@ -40,7 +44,7 @@ final class BusinessValueWinnerSelector {
 		$maturity               = is_array( $field_settings ) && isset( $field_settings['maturity_days'] ) ? absint( $field_settings['maturity_days'] ) : 14;
 		$currency               = isset( $settings['currency'] ) ? $settings['currency'] : 'USD';
 		$experiment['variants'] = $variants;
-		$cohorts                = $this->repository->cohorts( $experiment, $start, $end, $currency, $maturity );
+		$cohorts                = $this->repository->cohorts( $experiment, $start, $end, $currency, $maturity, true );
 		if ( ! $cohorts ) {
 			return $result; }
 		if ( $this->integrity->has_assignment_leakage( $cohorts ) ) {

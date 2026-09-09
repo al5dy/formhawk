@@ -639,16 +639,17 @@ final class Admin {
 		$totals             = $experiment ? $this->experiments->aggregate( $experiment['id'] ) : array();
 		$analysis           = null;
 		if ( count( $variants ) === 2 ) {
-			$control  = $totals[ $variants[0]['id'] ] ?? array();
-			$variant  = $totals[ $variants[1]['id'] ] ?? array();
-			$metric   = 'observed_submit_rate' === $experiment['primary_metric'] ? 'observed_submits' : 'confirmed_successes';
-			$analysis = in_array( $experiment['primary_metric'], array( 'business_value', 'qualified_leads', 'won_leads' ), true ) ? null : ( new WinnerSelector() )->select(
+			$control         = $totals[ $variants[0]['id'] ] ?? array();
+			$variant         = $totals[ $variants[1]['id'] ] ?? array();
+			$exposure_column = \Formhawk\CRO\DecisionEvidence::allows_autonomy( $experiment, $form['provider'] ) ? 'assignments' : 'views';
+			$metric          = 'observed_submit_rate' === $experiment['primary_metric'] ? 'observed_submits' : 'confirmed_successes';
+			$analysis        = in_array( $experiment['primary_metric'], array( 'business_value', 'qualified_leads', 'won_leads' ), true ) ? null : ( new WinnerSelector() )->select(
 				array(
-					'views'       => $control['views'] ?? 0,
+					'views'       => $control[ $exposure_column ] ?? 0,
 					'conversions' => $control[ $metric ] ?? 0,
 				),
 				array(
-					'views'       => $variant['views'] ?? 0,
+					'views'       => $variant[ $exposure_column ] ?? 0,
 					'conversions' => $variant[ $metric ] ?? 0,
 				),
 				$experiment['policy'],
@@ -692,6 +693,14 @@ final class Admin {
 				<div><strong><?php echo esc_html( $score['score'] ); ?></strong><span>/ 100</span><small><?php esc_html_e( 'Form Optimization Score', 'formhawk' ); ?></small></div>
 				<dl><div><dt><?php echo esc_html( ProviderCatalog::has_server_success( $form['provider'] ) ? __( 'Confirmed conversion', 'formhawk' ) : __( 'Observed submit rate', 'formhawk' ) ); ?></dt><dd><?php echo esc_html( $score['conversion'] ); ?></dd></div><div><dt><?php esc_html_e( 'Field friction', 'formhawk' ); ?></dt><dd><?php echo esc_html( $score['field_friction'] ); ?></dd></div><div><dt><?php esc_html_e( 'Validation', 'formhawk' ); ?></dt><dd><?php echo esc_html( $score['validation'] ); ?></dd></div><div><dt><?php esc_html_e( 'Completion', 'formhawk' ); ?></dt><dd><?php echo esc_html( $score['completion'] ); ?></dd></div><div><dt><?php esc_html_e( 'Confidence', 'formhawk' ); ?></dt><dd><?php echo esc_html( ucfirst( $score['confidence'] ) ); ?></dd></div></dl>
 			</div>
+			<?php if ( ! ProviderCatalog::has_server_success( $form['provider'] ) ) : ?>
+				<p class="notice notice-warning"><?php esc_html_e( 'Confirmed server-side submissions are unavailable for this generic HTML form. Observed submit attempts remain advisory; autonomous promotion is disabled. Use Observe or Approve mode.', 'formhawk' ); ?></p>
+			<?php endif; ?>
+			<?php if ( $experiment && (int) ( $experiment['integrity_version'] ?? 1 ) < 2 ) : ?>
+				<p class="notice notice-warning"><?php esc_html_e( 'This experiment predates protected assignment accounting. Automatic decisions are disabled; review it manually or start a new experiment. Historical views have not been converted into assignments.', 'formhawk' ); ?></p>
+			<?php elseif ( $experiment && 'client_telemetry_review' === $experiment['integrity_warning'] ) : ?>
+				<p class="notice notice-warning"><?php esc_html_e( 'Browser telemetry needs review. Client-only errors, validation and latency do not authorize automatic rejection or rollback.', 'formhawk' ); ?></p>
+			<?php endif; ?>
 			<?php if ( ! $settings ) : ?>
 				<div class="fh-cro-empty"><h3><?php esc_html_e( 'Safe by default', 'formhawk' ); ?></h3><p><?php esc_html_e( 'Autopilot starts in Approve mode. It never edits the provider form and will wait for enough traffic before proposing an experiment.', 'formhawk' ); ?></p>
 				<?php $this->autopilot_button( $form['id'], 'enable', __( 'Enable Autopilot', 'formhawk' ), 'button button-primary button-hero' ); ?></div>
@@ -708,6 +717,9 @@ final class Admin {
 				<?php if ( $experiment ) : ?>
 					<div class="fh-cro-current"><span class="fh-eyebrow"><?php esc_html_e( 'CURRENT EXPERIMENT', 'formhawk' ); ?></span><h3><?php echo esc_html( $experiment['hypothesis'] ); ?></h3><p><?php echo esc_html( $this->primary_metric_label( $experiment['primary_metric'] ) ); ?></p>
 					<?php if ( $analysis && count( $variants ) === 2 ) : ?>
+						<?php if ( 'assignments' === $exposure_column ) : ?>
+							<p class="fh-note"><?php echo esc_html( sprintf( /* translators: 1: control assignments, 2: variant assignments. */ __( 'Server-issued assignments: %1$d control / %2$d variant. Decision rates use assignments; browser views are separate observations.', 'formhawk' ), absint( $control['assignments'] ?? 0 ), absint( $variant['assignments'] ?? 0 ) ) ); ?></p>
+						<?php endif; ?>
 						<div class="fh-cro-compare"><div><span><?php esc_html_e( 'Control', 'formhawk' ); ?></span><strong><?php echo esc_html( number_format_i18n( 100 * $analysis['control_rate'], 1 ) . '%' ); ?></strong><small><?php echo esc_html( sprintf( /* translators: 1: views, 2: conversions, 3: traffic percentage. */ __( '%1$d views · %2$d conversions · %3$d%% traffic', 'formhawk' ), absint( $totals[ $variants[0]['id'] ]['views'] ?? 0 ), absint( $totals[ $variants[0]['id'] ][ $metric ] ?? 0 ), absint( $variants[0]['traffic_weight'] ) ) ); ?></small></div><div><span><?php esc_html_e( 'Variant', 'formhawk' ); ?></span><strong><?php echo esc_html( number_format_i18n( 100 * $analysis['variant_rate'], 1 ) . '%' ); ?></strong><small><?php echo esc_html( sprintf( /* translators: 1: views, 2: conversions, 3: traffic percentage. */ __( '%1$d views · %2$d conversions · %3$d%% traffic', 'formhawk' ), absint( $totals[ $variants[1]['id'] ]['views'] ?? 0 ), absint( $totals[ $variants[1]['id'] ][ $metric ] ?? 0 ), absint( $variants[1]['traffic_weight'] ) ) ); ?></small></div><div><span><?php esc_html_e( 'Probability better', 'formhawk' ); ?></span><strong><?php echo esc_html( number_format_i18n( 100 * $analysis['probability_to_be_best'], 1 ) . '%' ); ?></strong><small><?php echo esc_html( strtoupper( str_replace( '_', ' ', $analysis['decision'] ) ) . ' · ' . __( 'Beta-Binomial posterior', 'formhawk' ) ); ?></small></div></div>
 					<?php endif; ?>
 					<?php if ( in_array( $experiment['status'], array( ExperimentStatus::SUGGESTED, ExperimentStatus::AWAITING_APPROVAL, ExperimentStatus::RUNNING, ExperimentStatus::PAUSED_MANUAL ), true ) ) : ?>
@@ -732,7 +744,8 @@ final class Admin {
 				<details class="fh-cro-settings"><summary><?php esc_html_e( 'Autopilot mode and safety budget', 'formhawk' ); ?></summary>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"><input type="hidden" name="action" value="formhawk_autopilot"><input type="hidden" name="operation" value="save"><input type="hidden" name="form_id" value="<?php echo esc_attr( (string) $form['id'] ); ?>"><?php wp_nonce_field( 'formhawk_autopilot' ); ?>
 				<div class="fh-cro-settings-grid">
-					<label><?php esc_html_e( 'Mode', 'formhawk' ); ?><select name="mode"><option value="observe" <?php selected( $settings['mode'], 'observe' ); ?>><?php esc_html_e( 'Observe', 'formhawk' ); ?></option><option value="approve" <?php selected( $settings['mode'], 'approve' ); ?>><?php esc_html_e( 'Approve', 'formhawk' ); ?></option><option value="full" <?php selected( $settings['mode'], 'full' ); ?>><?php esc_html_e( 'Full Autopilot', 'formhawk' ); ?></option></select></label>
+					<?php $effective_mode = ! ProviderCatalog::has_server_success( $form['provider'] ) && 'full' === $settings['mode'] ? 'approve' : $settings['mode']; ?>
+					<label><?php esc_html_e( 'Mode', 'formhawk' ); ?><select name="mode"><option value="observe" <?php selected( $effective_mode, 'observe' ); ?>><?php esc_html_e( 'Observe', 'formhawk' ); ?></option><option value="approve" <?php selected( $effective_mode, 'approve' ); ?>><?php esc_html_e( 'Approve', 'formhawk' ); ?></option><option value="full" <?php selected( $effective_mode, 'full' ); ?> <?php disabled( ! ProviderCatalog::has_server_success( $form['provider'] ) ); ?>><?php esc_html_e( 'Full Autopilot', 'formhawk' ); ?></option></select></label>
 					<label><?php esc_html_e( 'Optimization objective', 'formhawk' ); ?><select name="optimization_objective"><option value="auto" <?php selected( $settings['optimization_objective'], 'auto' ); ?>><?php esc_html_e( 'Best available business metric', 'formhawk' ); ?></option><option value="submissions" <?php selected( $settings['optimization_objective'], 'submissions' ); ?>><?php esc_html_e( 'Confirmed submissions', 'formhawk' ); ?></option><option value="qualified_leads" <?php selected( $settings['optimization_objective'], 'qualified_leads' ); ?>><?php esc_html_e( 'Qualified leads / visitor', 'formhawk' ); ?></option><option value="won_leads" <?php selected( $settings['optimization_objective'], 'won_leads' ); ?>><?php esc_html_e( 'Won leads / visitor', 'formhawk' ); ?></option><option value="business_value" <?php selected( $settings['optimization_objective'], 'business_value' ); ?>><?php esc_html_e( 'Revenue / visitor', 'formhawk' ); ?></option></select></label>
 					<label><?php esc_html_e( 'Aggressiveness', 'formhawk' ); ?><select name="aggressiveness"><option value="conservative" <?php selected( $settings['aggressiveness'], 'conservative' ); ?>><?php esc_html_e( 'Conservative', 'formhawk' ); ?></option><option value="balanced" <?php selected( $settings['aggressiveness'], 'balanced' ); ?>><?php esc_html_e( 'Balanced', 'formhawk' ); ?></option><option value="aggressive" <?php selected( $settings['aggressiveness'], 'aggressive' ); ?>><?php esc_html_e( 'Aggressive', 'formhawk' ); ?></option></select></label>
 					<label><?php esc_html_e( 'Maximum experimental traffic (%)', 'formhawk' ); ?><input type="number" min="10" max="50" name="max_experimental_traffic" value="<?php echo esc_attr( (string) $settings['max_experimental_traffic'] ); ?>"></label>

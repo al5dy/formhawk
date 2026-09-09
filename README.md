@@ -22,11 +22,13 @@ Formhawk stores aggregate analytics in your WordPress database to help identify 
 
 Generic HTML submissions are observed browser attempts; provider-confirmed successes are separate evidence. See the [provider support matrix](docs/PROVIDER-SUPPORT.md) for capabilities, tested versions and remaining validation work.
 
-Version 0.5.1 fixes repeated AJAX submissions from the same CF7, WPForms or Elementor form being merged into one Field ROI submission. Each terminal request prepares a fresh opaque ID for the next independent submission; retries retain their ID. Browser and CRO attempts can repeat while views, starts and experiment assignment remain scoped to the page lifecycle. No database migration is required. Previously merged submissions cannot be reconstructed from Formhawk aggregates.
+Version 0.5.2 protects CRO against replayed browser telemetry with signed v2 contexts, short-lived server-side issuance state, atomic lifecycle admission and separate server-issued assignment counts. Client errors, validation and latency are advisory, not autonomous rejection/rollback authority. Generic HTML remains available in Observe/Approve mode with manual decisions; browser submit reports cannot promote a winner automatically. Schema v7 preserves historical data and keeps older experiments manual-safe. Back up before upgrading, clear caches and reload open pages: old v1 CRO tokens are intentionally no longer accepted.
+
+The 0.5.1 repeated-AJAX fix remains: independent CF7, WPForms and Elementor submissions get separate Field ROI IDs, while retries retain their ID. CRO attempts/latencies may repeat up to 50 times per issued page/form context without repeating views/starts or changing the experiment arm. Previously merged submissions cannot be reconstructed from Formhawk aggregates.
 
 ## Privacy
 
-Core analytics use daily aggregates, without submitted field values, analytics cookies, persistent visitor/session identifiers or external Formhawk analytics transmission. Field ROI adds only a cryptographically random per-submission linkage, structural field metadata and time-bounded outcome/value records; no visitor form value or raw CRM payload is stored. See [Field ROI architecture](docs/FIELD-ROI.md) and [readme.txt](readme.txt).
+Core analytics use daily aggregates, without submitted field values, analytics cookies, persistent visitor/session identifiers or external Formhawk analytics transmission. CRO replay protection stores only hashed random assignment identifiers, structural attribution, expiry and bounded lifecycle counters (not raw event payloads). Field ROI adds only a cryptographically random per-submission linkage, structural field metadata and time-bounded outcome/value records; no visitor form value or raw CRM payload is stored. See [CRO integrity](docs/AUTOPILOT-CRO.md), [Field ROI architecture](docs/FIELD-ROI.md) and [readme.txt](readme.txt).
 
 ## Development
 
@@ -74,7 +76,7 @@ npm run build
 npm run build:release
 ```
 
-The installable archive is `dist/formhawk-0.5.1.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
+The installable archive is `dist/formhawk-0.5.2.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
 
 ## Project documentation
 

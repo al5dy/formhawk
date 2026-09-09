@@ -69,6 +69,14 @@ The public REST endpoint enforces origin checks when browser headers are availab
 
 Labels are captured on discovery and use only the label's own text nodes; nested controls, output and dynamic descendants are excluded. Personalized labels changed after discovery are not re-read. Explicit metadata and page paths must remain structural.
 
+## 0.5.2 CRO integrity contract
+
+- CF7, WPForms and Elementor retain their existing provider hooks and terminal/error semantics. `_formhawk_submission` still rotates only at the terminal boundaries documented for 0.5.1; `_formhawk_cro` retains the issued page/form arm across repeated attempts.
+- A v2 signed context must also exist in short-lived server issuance storage before provider attribution is accepted. Trusted provider callbacks do not depend on browser view/attempt/latency delivery. Expired or old v1 contexts lose CRO attribution without blocking the underlying form or independent Field ROI linkage.
+- Each DOM instance receives its own context, even when two forms share a provider definition. CRO browser events carry bounded attempt sequence numbers; server retry and one-shot admission are transactional.
+- Generic HTML remains advisory and never gains Field ROI/provider-confirmed attribution. It can be observed and manually approved/promoted; Full Autopilot cannot decide from browser submit reports.
+- Regression coverage includes HMAC/issuance/expiry, REST lifecycle replay, two independent concurrent database connections, provider attribution across repeated requests, migration/recovery, protected statistical denominators and fail-open frontend mutations. This release does not add a new claim of real-provider browser E2E coverage.
+
 ## 0.5.1 resubmission regression verification (2026-09-08)
 
 - Reproduced the original defect before implementation: 13 JS regressions failed, including unchanged markers for all three providers and missing second CRO attempts. A separate database regression reproduced silent acceptance of conflicting provider entry IDs.

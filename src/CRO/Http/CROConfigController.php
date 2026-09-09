@@ -3,7 +3,9 @@
 namespace Formhawk\CRO\Http;
 
 use Formhawk\Contracts\BudgetStoreInterface;
+use Formhawk\Contracts\CROContextStoreInterface;
 use Formhawk\CRO\Attribution\ContextSigner;
+use Formhawk\CRO\Attribution\ContextStore;
 use Formhawk\CRO\CRODiagnostics;
 use Formhawk\CRO\CROIngestionLimits;
 use Formhawk\CRO\ExperimentRepository;
@@ -15,12 +17,14 @@ final class CROConfigController {
 	private $signer;
 	private $budgets;
 	private $diagnostics;
+	private $contexts;
 
-	public function __construct( ExperimentRepository $experiments = null, ContextSigner $signer = null, BudgetStoreInterface $budgets = null, CRODiagnostics $diagnostics = null ) {
+	public function __construct( ExperimentRepository $experiments = null, ContextSigner $signer = null, BudgetStoreInterface $budgets = null, CRODiagnostics $diagnostics = null, CROContextStoreInterface $contexts = null ) {
 		$this->experiments = $experiments ? $experiments : new ExperimentRepository();
 		$this->signer      = $signer ? $signer : new ContextSigner();
 		$this->budgets     = $budgets ? $budgets : new AtomicBudgetStore();
 		$this->diagnostics = $diagnostics ? $diagnostics : new CRODiagnostics();
+		$this->contexts    = $contexts ? $contexts : new ContextStore( $this->experiments );
 	}
 
 	public function register() {
@@ -45,7 +49,7 @@ final class CROConfigController {
 		if ( strlen( $body ) > $limits['body_bytes'] ) {
 			return $this->reject( 'formhawk_cro_config_size', 413 );
 		}
-		if ( ! $this->same_origin( $request ) || ! preg_match( '/^application\/json(?:\s*;|$)/i', (string) $request->get_header( 'content-type' ) ) ) {
+		if ( ! RequestOrigin::allows( $request ) || ! preg_match( '/^application\/json(?:\s*;|$)/i', (string) $request->get_header( 'content-type' ) ) ) {
 			return $this->reject( 'formhawk_cro_config_origin', 403 );
 		}
 		if ( ! $this->budgets->reserve( 'cro_config', 1, $limits['config_requests_per_minute'], MINUTE_IN_SECONDS ) ) {
@@ -59,13 +63,14 @@ final class CROConfigController {
 		$page_path = Sanitizer::path( $data['page_path'] );
 		$segment   = $data['segment'];
 		$assigned  = array();
-		foreach ( $data['forms'] as $identity ) {
+		foreach ( array_values( $data['forms'] ) as $form_index => $identity ) {
 			$runtime = $this->experiments->runtime_for_identity( $identity['provider'], $identity['provider_form_id'], $page_path );
 			if ( ! $runtime ) {
 				continue;
 			}
 			if ( ! empty( $runtime['deployment'] ) ) {
 				$assigned[] = array(
+					'form_index'       => $form_index,
 					'provider'         => $identity['provider'],
 					'provider_form_id' => $identity['provider_form_id'],
 					'experiment_id'    => 0,
@@ -84,7 +89,7 @@ final class CROConfigController {
 			if ( ! $variant ) {
 				continue;
 			}
-			$context                       = array(
+			$context = array(
 				'experiment_id'    => absint( $runtime['experiment']['id'] ),
 				'variant_id'       => absint( $variant['id'] ),
 				'form_id'          => absint( $runtime['form_id'] ),
@@ -92,9 +97,16 @@ final class CROConfigController {
 				'provider_form_id' => $identity['provider_form_id'],
 				'segment'          => $segment,
 			);
-			$control_context               = $context;
-			$control_context['variant_id'] = absint( $runtime['variants'][0]['id'] );
-			$assigned[]                    = array(
+			$token   = $this->signer->sign( $context, $runtime['experiment']['policy']['context_ttl_seconds'] ?? 7200 );
+			$issued  = $this->signer->verify( $token );
+			if ( ! $issued || ! $this->contexts->issue( $issued ) ) {
+				// Never apply an unaccounted experimental mutation; the original form remains usable.
+				$this->diagnostics->increment( 'storage_failures' );
+				$this->diagnostics->increment( 'cro_integrity_warning' );
+				continue;
+			}
+			$assigned[] = array(
+				'form_index'       => $form_index,
 				'provider'         => $identity['provider'],
 				'provider_form_id' => $identity['provider_form_id'],
 				'experiment_id'    => $context['experiment_id'],
@@ -102,9 +114,10 @@ final class CROConfigController {
 				'variant_name'     => $variant['name'],
 				'control'          => 'baseline' === $variant['mutation_type'],
 				'config'           => $variant['config'],
-				'context'          => $this->signer->sign( $context, $runtime['experiment']['policy']['context_ttl_seconds'] ?? 7200 ),
+				'context'          => $token,
 				'fallback_config'  => $runtime['variants'][0]['config'],
-				'fallback_context' => $this->signer->sign( $control_context, $runtime['experiment']['policy']['context_ttl_seconds'] ?? 7200 ),
+				// A caller must not receive a second usable token for an arm it was not assigned.
+				'fallback_context' => '',
 			);
 		}
 		$response = new \WP_REST_Response( array( 'assignments' => $assigned ), 200 );
@@ -144,7 +157,11 @@ final class CROConfigController {
 		if ( $this->test_mode() && in_array( $force, array( 'control', 'variant' ), true ) ) {
 			return 'control' === $force ? $variants[0] : $variants[1];
 		}
-		$roll      = random_int( 1, 100 );
+		try {
+			$roll = random_int( 1, 100 );
+		} catch ( \Exception $exception ) {
+			return null;
+		}
 		$cursor    = 0;
 		$selection = $variants[0];
 		foreach ( $variants as $variant ) {
@@ -172,28 +189,6 @@ final class CROConfigController {
 
 	private function test_mode() {
 		return defined( 'WP_DEBUG' ) && WP_DEBUG && defined( 'FORMHAWK_CRO_TEST_MODE' ) && FORMHAWK_CRO_TEST_MODE;
-	}
-
-	private function same_origin( \WP_REST_Request $request ) {
-		$source = $request->get_header( 'origin' );
-		if ( ! $source ) {
-			$source = $request->get_header( 'referer' );
-		}
-		if ( ! $source ) {
-			return true;
-		}
-		return $this->origin( home_url( '/' ) ) === $this->origin( $source );
-	}
-
-	private function origin( $url ) {
-		$scheme = strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) );
-		$host   = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
-		$port   = wp_parse_url( $url, PHP_URL_PORT );
-		if ( ! $scheme || ! $host ) {
-			return '';
-		}
-		$port = $port ? absint( $port ) : ( 'https' === $scheme ? 443 : 80 );
-		return $scheme . '://' . $host . ':' . $port;
 	}
 
 	private function reject( $code, $status, $throttled = false ) {

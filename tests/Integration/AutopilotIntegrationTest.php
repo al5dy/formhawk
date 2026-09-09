@@ -14,6 +14,181 @@ use Formhawk\Tests\Fixtures\IsolatedStorageTestCase;
 use Formhawk\Tests\Fixtures\RecordingEventRecorder;
 
 final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
+	public function test_client_errors_validation_and_latency_only_request_review() {
+		list( $manager, $repository, $experiment, $variants ) = $this->running_experiment();
+		$repository->increment(
+			$experiment['id'],
+			$variants[0]['id'],
+			'desktop',
+			array(
+				'assignments'         => 100,
+				'views'               => 100,
+				'starts'              => 100,
+				'confirmed_successes' => 10,
+				'latency_samples'     => 30,
+				'latency_total_ms'    => 3000,
+			)
+		);
+		$repository->increment(
+			$experiment['id'],
+			$variants[1]['id'],
+			'desktop',
+			array(
+				'assignments'                => 100,
+				'views'                      => 100,
+				'starts'                     => 100,
+				'confirmed_successes'        => 10,
+				'js_errors'                  => 3,
+				'client_validation_failures' => 90,
+				'latency_samples'            => 30,
+				'latency_total_ms'           => 90000,
+			)
+		);
+		$this->assertTrue( $manager->evaluate_form( $experiment['form_id'] ) );
+		$current = $repository->find( $experiment['id'] );
+		$this->assertSame( ExperimentStatus::RUNNING, $current['status'] );
+		$this->assertSame( 'client_telemetry_review', $current['integrity_warning'] );
+		$this->assertStringContainsString( 'Client-only errors, validation and latency do not authorize automatic rejection or rollback.', $this->autopilot_html( $repository, $experiment['form_id'] ) );
+		$this->assertSame( 50, absint( $repository->variants( $experiment['id'] )[1]['traffic_weight'] ) );
+		$this->assertSame( array(), $repository->history( $experiment['form_id'] ) );
+		$this->assertSame( array(), $repository->settings( $experiment['form_id'] )['baseline'] );
+	}
+
+	public function test_client_only_anomaly_cannot_roll_back_a_promoted_baseline() {
+		list( $manager, $repository, $experiment, $variants ) = $this->running_experiment();
+		$baseline = $variants[1]['config']['mutations'];
+		$this->assertTrue( $repository->promote_experiment( $experiment['form_id'], $experiment['id'], $variants[1]['id'], $baseline ) );
+		$repository->set_status( $experiment['id'], ExperimentStatus::PROMOTED_MONITORING, array( 'ended_at_utc' => gmdate( 'Y-m-d H:i:s', time() - 2 * DAY_IN_SECONDS ) ) );
+		$repository->increment(
+			$experiment['id'],
+			$variants[0]['id'],
+			'desktop',
+			array(
+				'assignments'         => 100,
+				'views'               => 100,
+				'confirmed_successes' => 10,
+			)
+		);
+		$repository->increment(
+			$experiment['id'],
+			$variants[1]['id'],
+			'desktop',
+			array(
+				'assignments'         => 100,
+				'views'               => 100,
+				'confirmed_successes' => 10,
+				'js_errors'           => 3,
+			)
+		);
+		$this->assertTrue( $manager->evaluate_form( $experiment['form_id'] ) );
+		$this->assertSame( ExperimentStatus::PROMOTED_MONITORING, $repository->find( $experiment['id'] )['status'] );
+		$this->assertSame( $baseline, $repository->settings( $experiment['form_id'] )['baseline'] );
+		$this->assertSame( array(), $repository->history( $experiment['form_id'] ) );
+	}
+
+	public function test_selectively_reported_views_cannot_change_the_server_assignment_denominator() {
+		list( $manager, $repository, $experiment, $variants ) = $this->running_experiment();
+		$repository->set_status( $experiment['id'], ExperimentStatus::RUNNING, array( 'started_at_utc' => gmdate( 'Y-m-d H:i:s', time() - 14 * DAY_IN_SECONDS ) ) );
+		$repository->increment(
+			$experiment['id'],
+			$variants[0]['id'],
+			'desktop',
+			array(
+				'assignments'         => 10000,
+				'views'               => 1000000,
+				'confirmed_successes' => 500,
+			)
+		);
+		$repository->increment(
+			$experiment['id'],
+			$variants[1]['id'],
+			'desktop',
+			array(
+				'assignments'         => 10000,
+				'views'               => 1000,
+				'confirmed_successes' => 500,
+			)
+		);
+		$this->assertTrue( $manager->evaluate_form( $experiment['form_id'] ) );
+		$this->assertSame( ExperimentStatus::RUNNING, $repository->find( $experiment['id'] )['status'] );
+		$this->assertSame( array(), $repository->history( $experiment['form_id'] ) );
+		$this->assertSame( array(), $repository->settings( $experiment['form_id'] )['baseline'] );
+	}
+
+	public function test_generic_full_mode_requires_manual_start_and_never_promotes_browser_conversions() {
+		list( $manager, $repository, $experiment, $variants ) = $this->running_experiment( 'html' );
+		$this->assertSame( ExperimentStatus::AWAITING_APPROVAL, $experiment['status'] );
+		$this->assertSame( 'observed_submit_rate', $experiment['primary_metric'] );
+		$html = $this->autopilot_html( $repository, $experiment['form_id'] );
+		$this->assertStringContainsString( 'autonomous promotion is disabled', $html );
+		$this->assertMatchesRegularExpression( '/<option value="full"[^>]*\bdisabled=/', $html );
+		$this->assertStringContainsString( 'Promote variant', $html );
+		$this->assertTrue( $manager->evaluate_form( $experiment['form_id'] ) );
+		$this->assertSame( ExperimentStatus::AWAITING_APPROVAL, $repository->find( $experiment['id'] )['status'] );
+		$this->assertTrue( $repository->start( $experiment['id'] ) );
+		$repository->set_status( $experiment['id'], ExperimentStatus::RUNNING, array( 'started_at_utc' => gmdate( 'Y-m-d H:i:s', time() - 60 * DAY_IN_SECONDS ) ) );
+		$repository->increment(
+			$experiment['id'],
+			$variants[0]['id'],
+			'desktop',
+			array(
+				'assignments'      => 10000,
+				'views'            => 10000,
+				'observed_submits' => 100,
+			)
+		);
+		$repository->increment(
+			$experiment['id'],
+			$variants[1]['id'],
+			'desktop',
+			array(
+				'assignments'      => 10000,
+				'views'            => 10000,
+				'observed_submits' => 9000,
+				'js_errors'        => 9999,
+			)
+		);
+		$this->assertTrue( $manager->evaluate_form( $experiment['form_id'] ) );
+		$this->assertSame( ExperimentStatus::RUNNING, $repository->find( $experiment['id'] )['status'] );
+		$this->assertSame( 'confirmed_evidence_required', $repository->find( $experiment['id'] )['integrity_warning'] );
+		$this->assertSame( array(), $repository->history( $experiment['form_id'] ) );
+		$this->assertSame( array(), $repository->settings( $experiment['form_id'] )['baseline'] );
+		// Explicit owner approval remains available; the restriction is autonomous authority.
+		$this->assertTrue( $repository->promote_experiment( $experiment['form_id'], $experiment['id'], $variants[1]['id'], $variants[1]['config']['mutations'] ) );
+	}
+
+	public function test_legacy_experiments_remain_manual_safe_even_after_new_assignments_arrive() {
+		global $wpdb;
+		list( $manager, $repository, $experiment, $variants ) = $this->running_experiment();
+		$wpdb->update( Database::experiments_table(), array( 'integrity_version' => 1 ), array( 'id' => $experiment['id'] ) );
+		$repository->set_status( $experiment['id'], ExperimentStatus::RUNNING, array( 'started_at_utc' => gmdate( 'Y-m-d H:i:s', time() - 60 * DAY_IN_SECONDS ) ) );
+		$repository->increment(
+			$experiment['id'],
+			$variants[0]['id'],
+			'desktop',
+			array(
+				'assignments'         => 10000,
+				'views'               => 10000,
+				'confirmed_successes' => 500,
+			)
+		);
+		$repository->increment(
+			$experiment['id'],
+			$variants[1]['id'],
+			'desktop',
+			array(
+				'assignments'         => 10000,
+				'views'               => 10000,
+				'confirmed_successes' => 9000,
+				'js_errors'           => 9000,
+			)
+		);
+		$this->assertTrue( $manager->evaluate_form( $experiment['form_id'] ) );
+		$this->assertSame( ExperimentStatus::RUNNING, $repository->find( $experiment['id'] )['status'] );
+		$this->assertSame( 'legacy_experiment_review', $repository->find( $experiment['id'] )['integrity_warning'] );
+		$this->assertSame( array(), $repository->history( $experiment['form_id'] ) );
+	}
+
 	public function test_full_autopilot_creates_runs_and_promotes_a_confirmed_conversion_experiment() {
 		global $wpdb;
 		$forms      = new FormRepository();
@@ -62,6 +237,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'desktop',
 			array(
 				'views'               => 10000,
+				'assignments'         => 10000,
 				'confirmed_successes' => 5000,
 			)
 		);
@@ -71,6 +247,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'desktop',
 			array(
 				'views'               => 10000,
+				'assignments'         => 10000,
 				'confirmed_successes' => 5500,
 			)
 		);
@@ -168,6 +345,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'desktop',
 			array(
 				'views'               => 10000,
+				'assignments'         => 10000,
 				'confirmed_successes' => 5000,
 			)
 		);
@@ -177,6 +355,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'desktop',
 			array(
 				'views'               => 10000,
+				'assignments'         => 10000,
 				'confirmed_successes' => 5500,
 			)
 		);
@@ -186,6 +365,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'mobile',
 			array(
 				'views'               => 200,
+				'assignments'         => 200,
 				'confirmed_successes' => 100,
 			)
 		);
@@ -195,6 +375,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'mobile',
 			array(
 				'views'               => 200,
+				'assignments'         => 200,
 				'confirmed_successes' => 10,
 			)
 		);
@@ -226,6 +407,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'desktop',
 			array(
 				'views'               => 1000,
+				'assignments'         => 1000,
 				'confirmed_successes' => 100,
 			)
 		);
@@ -235,6 +417,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'desktop',
 			array(
 				'views'               => 1000,
+				'assignments'         => 1000,
 				'confirmed_successes' => 20,
 			)
 		);
@@ -265,6 +448,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'desktop',
 			array(
 				'views'               => 500,
+				'assignments'         => 500,
 				'confirmed_successes' => 50,
 			)
 		);
@@ -274,6 +458,7 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 			'desktop',
 			array(
 				'views'               => 500,
+				'assignments'         => 500,
 				'confirmed_successes' => 50,
 				'provider_failures'   => 40,
 			)
@@ -351,12 +536,29 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 		$this->assertSame( 1, $method->invoke( new Cleanup(), '2025-01-01' ) );
 	}
 
-	private function running_experiment() {
+	private function autopilot_html( ExperimentRepository $repository, $form_id ) {
+		if ( ! function_exists( 'submit_button' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/template.php';
+		}
+		$forms  = new FormRepository();
+		$admin  = new \Formhawk\Admin\Admin( $forms, new \Formhawk\Integrations\IntegrationRegistry( array() ), $repository );
+		$method = new \ReflectionMethod( $admin, 'render_autopilot' );
+		$method->setAccessible( true );
+		ob_start();
+		try {
+			$method->invoke( $admin, $forms->find( $form_id ), array(), array() );
+			return ob_get_contents();
+		} finally {
+			ob_end_clean();
+		}
+	}
+
+	private function running_experiment( $provider = 'cf7' ) {
 		global $wpdb;
 		$forms    = new FormRepository();
 		$identity = $forms->resolve(
 			array(
-				'provider'         => 'cf7',
+				'provider'         => $provider,
 				'provider_form_id' => '99',
 				'title'            => 'Quote request',
 				'page_path'        => '/quote',

@@ -94,7 +94,7 @@ final class DatabaseMigrationIntegrationTest extends TestCase {
 		update_option( 'formhawk_db_version', '1', false );
 		Database::maybe_upgrade();
 
-		$this->assertSame( '6', (string) get_option( 'formhawk_db_version', '' ) );
+		$this->assertSame( '7', (string) get_option( 'formhawk_db_version', '' ) );
 		$this->assertTrue( Database::tables_exist() );
 		$this->assertTrue( Database::schema_is_current() );
 		$this->assertSame( '0', $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', Database::submissions_table() ) ), 'Historical aggregate traffic must not be fabricated into outcome linkage.' );

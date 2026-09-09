@@ -5,6 +5,7 @@ namespace Formhawk\Infrastructure;
 use Formhawk\Infrastructure\Migrations\Version4;
 use Formhawk\Infrastructure\Migrations\Version5;
 use Formhawk\Infrastructure\Migrations\Version6;
+use Formhawk\Infrastructure\Migrations\Version7;
 
 final class Database {
 	public static function dimension_lock_name() {
@@ -55,6 +56,11 @@ final class Database {
 	public static function cro_forms_table() {
 		global $wpdb;
 		return $wpdb->prefix . 'formhawk_cro_forms';
+	}
+
+	public static function cro_contexts_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_cro_contexts';
 	}
 
 	public static function experiments_table() {
@@ -111,7 +117,7 @@ final class Database {
 	public static function install() {
 		self::install_core_schema();
 		self::install_placement_schema();
-		$migrated = Version4::run() && Version5::run() && Version6::run();
+		$migrated = Version4::run() && Version5::run() && Version6::run() && Version7::run();
 
 		if ( $migrated && self::tables_exist() && self::schema_is_current() ) {
 			update_option( 'formhawk_db_version', FORMHAWK_DB_VERSION, false );
@@ -159,6 +165,10 @@ final class Database {
 		}
 		if ( version_compare( $installed_version, '5', '>=' ) && version_compare( $installed_version, '6', '<' ) && Version6::run() ) {
 			update_option( 'formhawk_db_version', '6', false );
+			$installed_version = '6';
+		}
+		if ( version_compare( $installed_version, '6', '>=' ) && version_compare( $installed_version, '7', '<' ) && Version7::run() ) {
+			update_option( 'formhawk_db_version', '7', false );
 		}
 	}
 
@@ -313,7 +323,7 @@ final class Database {
 	}
 
 	public static function cro_schema_is_current( $verify = false ) {
-		return $verify ? Version5::is_current() : version_compare( (string) get_option( 'formhawk_db_version', '' ), '5', '>=' );
+		return $verify ? Version5::is_current() && Version7::is_current() : version_compare( (string) get_option( 'formhawk_db_version', '' ), '7', '>=' );
 	}
 
 	private static function schema_is_version_2() {
@@ -371,6 +381,7 @@ final class Database {
 			self::budgets_table(),
 			self::dimensions_table(),
 			self::cro_forms_table(),
+			self::cro_contexts_table(),
 			self::experiments_table(),
 			self::variants_table(),
 			self::experiment_daily_table(),

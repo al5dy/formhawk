@@ -5,7 +5,7 @@ namespace Formhawk\CRO;
 use Formhawk\Infrastructure\Database;
 
 final class CRODiagnostics {
-	const COUNTERS = array( 'rejected_config_requests', 'throttled_config_requests', 'rejected_event_requests', 'throttled_event_requests', 'storage_failures' );
+	const COUNTERS = array( 'rejected_config_requests', 'throttled_config_requests', 'rejected_event_requests', 'throttled_event_requests', 'storage_failures', 'replayed_context_event', 'invalid_context_lifecycle', 'unknown_context', 'expired_context', 'duplicate_view', 'duplicate_start', 'duplicate_js_error', 'event_without_attempt', 'cro_integrity_warning' );
 
 	public function increment( $counter ) {
 		global $wpdb;
@@ -28,8 +28,8 @@ final class CRODiagnostics {
 	public function today() {
 		global $wpdb;
 		$result = array_fill_keys( self::COUNTERS, 0 );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Five fixed aggregate keys; no visitor dimensions.
-		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT scope_key, used FROM %i WHERE scope_key LIKE %s AND window_id = %d LIMIT 5', Database::budgets_table(), $wpdb->esc_like( 'cro_diagnostic_' ) . '%', (int) floor( time() / DAY_IN_SECONDS ) ), ARRAY_A );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Fixed aggregate keys; no visitor dimensions.
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT scope_key, used FROM %i WHERE scope_key LIKE %s AND window_id = %d LIMIT %d', Database::budgets_table(), $wpdb->esc_like( 'cro_diagnostic_' ) . '%', (int) floor( time() / DAY_IN_SECONDS ), count( self::COUNTERS ) ), ARRAY_A );
 		foreach ( (array) $rows as $row ) {
 			$key = substr( $row['scope_key'], strlen( 'cro_diagnostic_' ) );
 			if ( isset( $result[ $key ] ) ) {

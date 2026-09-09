@@ -12,11 +12,13 @@ final class GuardrailEvaluatorTest extends TestCase {
 		$result = ( new GuardrailEvaluator() )->evaluate(
 			array(
 				'views'               => 2000,
+				'assignments'         => 2000,
 				'conversions'         => 200,
 				'confirmed_successes' => 200,
 			),
 			array(
 				'views'               => 2000,
+				'assignments'         => 2000,
 				'conversions'         => 80,
 				'confirmed_successes' => 80,
 			),
@@ -32,11 +34,13 @@ final class GuardrailEvaluatorTest extends TestCase {
 		$result                             = ( new GuardrailEvaluator() )->evaluate(
 			array(
 				'views'               => 2000,
+				'assignments'         => 2000,
 				'conversions'         => 240,
 				'confirmed_successes' => 240,
 			),
 			array(
 				'views'               => 2000,
+				'assignments'         => 2000,
 				'conversions'         => 160,
 				'confirmed_successes' => 160,
 			),
@@ -50,12 +54,14 @@ final class GuardrailEvaluatorTest extends TestCase {
 		$policy  = ( new OptimizationPolicy() )->for_form( array() );
 		$control = array(
 			'views'       => 500,
+			'assignments' => 500,
 			'conversions' => 50,
 		);
 		$result  = ( new GuardrailEvaluator() )->evaluate(
 			$control,
 			array(
 				'views'             => 500,
+				'assignments'       => 500,
 				'conversions'       => 50,
 				'provider_failures' => 30,
 			),
@@ -66,12 +72,15 @@ final class GuardrailEvaluatorTest extends TestCase {
 			$control,
 			array(
 				'views'       => 500,
+				'assignments' => 500,
 				'conversions' => 50,
 				'js_errors'   => 20,
 			),
 			$policy
 		);
-		$this->assertSame( 'js_error_rate', $result['reason'] );
+		$this->assertFalse( $result['triggered'] );
+		$this->assertSame( 'js_error_rate', $result['warnings'][0]['reason'] );
+		$this->assertSame( 'client_observed', $result['warnings'][0]['evidence'] );
 	}
 
 	public function test_provider_validation_uses_mathematically_compatible_outcomes() {
@@ -79,12 +88,14 @@ final class GuardrailEvaluatorTest extends TestCase {
 		$result = ( new GuardrailEvaluator() )->evaluate(
 			array(
 				'views'                        => 500,
+				'assignments'                  => 500,
 				'conversions'                  => 90,
 				'confirmed_successes'          => 90,
 				'provider_validation_failures' => 10,
 			),
 			array(
 				'views'                        => 500,
+				'assignments'                  => 500,
 				'conversions'                  => 60,
 				'confirmed_successes'          => 60,
 				'provider_validation_failures' => 90,
@@ -100,19 +111,21 @@ final class GuardrailEvaluatorTest extends TestCase {
 		$result = ( new GuardrailEvaluator() )->evaluate(
 			array(
 				'views'                      => 200,
+				'assignments'                => 200,
 				'starts'                     => 100,
 				'conversions'                => 20,
 				'client_validation_failures' => 5,
 			),
 			array(
 				'views'                      => 200,
+				'assignments'                => 200,
 				'starts'                     => 100,
 				'conversions'                => 20,
 				'client_validation_failures' => 40,
 			),
 			$policy
 		);
-		$this->assertTrue( $result['triggered'] );
-		$this->assertSame( 'client_validation_explosion', $result['reason'] );
+		$this->assertFalse( $result['triggered'] );
+		$this->assertSame( 'client_validation_explosion', $result['warnings'][0]['reason'] );
 	}
 }

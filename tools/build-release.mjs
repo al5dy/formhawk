@@ -37,6 +37,7 @@ const excludedPaths = new Set([
 	'tools/phpstan-bootstrap.php',
 	'tools/benchmark-migration.php',
 	'tools/benchmark-field-roi.php',
+	'tools/benchmark-cro-integrity.php',
 	'vendor',
 	'vitest.config.js',
 ]);

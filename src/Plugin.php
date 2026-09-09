@@ -6,6 +6,7 @@ use Formhawk\Admin\Admin;
 use Formhawk\Analytics\EventIngestor;
 use Formhawk\Analytics\FormRepository;
 use Formhawk\CRO\Attribution\AttributingEventRecorder;
+use Formhawk\CRO\Attribution\ContextCleanup;
 use Formhawk\CRO\Attribution\RequestContext;
 use Formhawk\CRO\AutopilotManager;
 use Formhawk\CRO\ExperimentRepository;
@@ -77,6 +78,7 @@ final class Plugin {
 			( new FieldROIAdmin() )->register();
 		}
 		if ( Database::cro_schema_is_current() ) {
+			( new ContextCleanup() )->register();
 			( new CROConfigController( $cro ) )->register();
 			( new CROEventsController( $cro ) )->register();
 			( new AutopilotManager( $cro, $forms ) )->register();

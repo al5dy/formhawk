@@ -125,3 +125,54 @@ or 180 days). Bounded cleanup first preserves daily aggregate/result/history dat
 then deletes outcome and structural child rows, and finally deletes the expired
 submission. Deactivation never drops data. An intentional downgrade should restore
 the matching database backup because older code does not understand v6 outcomes.
+## Version 6 to 7 (Formhawk 0.5.2)
+
+The v7 migration adds `formhawk_cro_contexts`: a short-lived issued-assignment
+registry keyed by SHA-256 of a 128-bit random JTI. It stores structural experiment,
+variant, form and segment IDs, UTC issuance/expiry, one-shot event flags and bounded
+attempt/terminal counters. `expires_at_utc` indexes bounded TTL deletion. No raw
+token, JTI, visitor identity or field value is stored. Context issuance and its
+`assignments` aggregate commit together; each event transition and its aggregate
+increment also commit together under an InnoDB row lock.
+
+`formhawk_experiment_daily.assignments` starts at zero and preserves the meaning
+of `views`. Experiments gain `integrity_version` (existing rows default to 1; new
+experiments explicitly use 2) and a bounded `integrity_warning`. Historical v1
+experiments remain reportable/manual-safe and cannot automatically promote,
+reject or roll back from mixed historical denominators. No assignments are copied
+from views. Start a new experiment to collect a complete v2 decision cohort.
+
+DDL is additive and restart-safe. The database version advances only after table,
+column, expiry-index and transactional-engine verification. Partial migration
+disables CRO runtime while normal forms/core analytics remain available. Retry the
+upgrade after resolving the storage error. Recovery preserves all historical
+tables/columns; do not downgrade to vulnerable 0.5.1 code to restore automation.
+
+Contexts expire with their signed token (300–86,400 seconds). Fifteen-minute WP-Cron
+cleanup and bounded issuance-time cleanup delete expired rows. A per-site cap of
+50,000 rows bounds growth even if cron is missed; issuance fails open to the
+original form if storage/admission fails. Deactivation retains data; uninstall
+removes the registry only when explicit cleanup is enabled.
+
+Cleanup deletes at most 5,000 expired rows per run, with one-minute continuation
+for a backlog; issuance opportunistically deletes at most 1,000. Optional headers
+and rate budgets do not replace this storage boundary. WP-Cron needs traffic or a
+system cron trigger: when cron is disabled, the capacity cap still bounds growth,
+but physical expiry deletion cannot be promised while the site is not executing.
+
+Both the context registry and CRO daily aggregates are verified as InnoDB. An old
+nontransactional aggregate table is converted without changing its counters. DDL
+is serialized by a fixed site lock; ALTER TABLE duration/locking depends on the
+database server, so large sites should use a maintenance window and a backup.
+
+Reproducible synthetic migration/capacity benchmark:
+
+```sh
+FORMHAWK_BENCHMARK_DISPOSABLE=1 wp --path=/path/to/disposable-wordpress \
+  eval-file wp-content/plugins/formhawk/tools/benchmark-cro-integrity.php
+```
+
+It upgrades 50,000 actual pre-v7 CRO aggregate rows, verifies frozen history and
+zero historical assignments, repeats the migration, fills the context registry
+to its 50,000-row cap, verifies failed admission, expires the rows and checks
+bounded cleanup/recovery. Only randomly prefixed synthetic tables are removed.

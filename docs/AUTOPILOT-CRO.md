@@ -2,7 +2,7 @@
 
 ## Product contract
 
-Autopilot is an aggregate-only local loop:
+Autopilot is a local aggregate decision loop with short-lived replay-protection state:
 
 `analyze → rank opportunity → create hypothesis → generate a safe runtime variant → experiment → guard → decide → promote → monitor → continue`
 
@@ -12,7 +12,7 @@ Modes have real execution semantics:
 
 - **Observe** creates a suggestion but sends no experimental traffic.
 - **Approve** creates a ready experiment and waits for an administrator to start it. This is the default.
-- **Full Autopilot** starts, stops, promotes, monitors and rolls back without a manual experiment builder.
+- **Full Autopilot** starts, stops, promotes, monitors and rolls back only with protected server-confirmed evidence. Generic HTML cannot use browser-observed submits for autonomous decisions; its experiments remain available for manual start/promotion/rejection.
 
 Only one meaningful mutation may be active for a form. A promoted mutation becomes the next baseline layer; the following experiment adds one mutation to it.
 
@@ -22,9 +22,10 @@ Only one meaningful mutation may be active for a form. A promoted mutation becom
 - `HypothesisEngine` converts the selected structural signal into a reproducible explanation.
 - `VariantGenerator` and `MutationRegistry` build one control and one candidate through independent strategies.
 - `ExperimentRepository` owns normalized storage, atomic aggregate upserts, baseline ancestry, transactional promote/rollback transitions, immutable decisions and per-form locks.
-- `CROConfigController` performs page-lifecycle assignment from a cache-neutral, no-store REST response.
+- `CROConfigController` performs page/form-instance assignment from a cache-neutral, no-store REST response; it registers the context and counts the server-selected arm before returning a mutation.
+- `ContextStore` atomically admits bounded client lifecycle transitions and their aggregate increments. `DecisionEvidence` separates server-confirmed decision authority from client-observed advisory telemetry.
 - `variant-engine.js` classifies the live provider DOM and applies or atomically restores mutations. Invalid, corrupt or unsupported configurations fail open to control.
-- `RequestContext` verifies the signed structural marker and removes it from `$_POST` and `$_REQUEST` before provider processing.
+- `RequestContext` verifies the signed, issued, unexpired structural marker and removes it from `$_POST` and `$_REQUEST` before provider processing.
 - `AttributingEventRecorder` joins trusted provider outcomes to an arm after the normal analytics write succeeds.
 - `StatisticalEngine`, `WinnerSelector` and `GuardrailEvaluator` make deterministic decisions; no LLM selects a winner.
 - `AutopilotManager` is an hourly, idempotent state machine protected by a non-blocking MySQL advisory lock.
@@ -55,7 +56,7 @@ Indexes serve active form/status lookup, the bounded evaluation queue, two-arm d
 | Label presentation | presentation class only | does not change label text or associations |
 | Placeholder presentation | presentation class only | does not change field meaning or value |
 
-The server excludes field metadata resembling passwords, authentication, payment, OTP, CAPTCHA, CSRF/nonces, terms/privacy/GDPR/consent, signatures and files. The runtime independently classifies fields as SAFE, CAUTION, PROTECTED or FORBIDDEN. Required fields are PROTECTED. Any conditional marker or ambiguous wrapper makes structural mutation unsafe. Hidden provider fields are never moved. Runtime exceptions restore all anchors/classes/text, replace variant attribution with a signed control context and use control.
+The server excludes field metadata resembling passwords, authentication, payment, OTP, CAPTCHA, CSRF/nonces, terms/privacy/GDPR/consent, signatures and files. The runtime independently classifies fields as SAFE, CAUTION, PROTECTED or FORBIDDEN. Required fields are PROTECTED. Any conditional marker or ambiguous wrapper makes structural mutation unsafe. Hidden provider fields are never moved. Runtime exceptions restore all anchors/classes/text, remove experimental attribution and use control. There is no alternate usable control token: issuing both arms would let a caller select which arm to report. The failed assigned arm keeps its server-issued exposure and can receive one advisory JS error.
 
 The dependency recognizer intentionally declines mutations when it cannot prove independence. Safety has priority over experiment volume.
 
@@ -74,13 +75,30 @@ Generic browser submit is never relabelled as confirmed conversion. Provider ada
 
 ## Attribution and privacy
 
-An assignment contains only experiment ID, variant ID, Formhawk form ID, provider, provider form ID, desktop/mobile segment and expiry. It is authenticated with HMAC derived from the WordPress auth salt. For CF7/WPForms/Elementor it is a short-lived technical submission marker, not authentication and not a visitor identifier, and is removed before provider code builds entry, mail or CRM collections. Generic HTML never receives a hidden marker because it has no confirmed server attribution and Formhawk must not alter an arbitrary submission payload.
+ContextSigner v2 contains experiment ID, variant ID, Formhawk form ID, provider, provider form ID, desktop/mobile segment, `iat`, `exp` and `jti`. The JTI is 16 bytes from `random_bytes()`, encoded as 22 URL-safe characters. HMAC is derived from the WordPress auth salt and site URL; signatures, exact claim shape, canonical JTI encoding and a 300–86,400 second lifetime are verified. V1 tokens are rejected, including on cached/open pages. For CF7/WPForms/Elementor the token is a short-lived technical submission marker, not visitor authentication or a visitor identifier, and is removed before provider code builds entry, mail or CRM collections. Generic HTML never receives a hidden marker because it has no confirmed server attribution and Formhawk must not alter an arbitrary submission payload.
 
 Since 0.5.1, successful AJAX completion allows a later independent submission from the same form to record another `attempt` and `latency`. Duplicate submits before the response and duplicate terminal callbacks remain deduplicated. A successful terminal state suppresses pagehide abandonment until new editing/validation or submission. Views/starts and `_formhawk_cro` stay in the same page lifecycle and experiment arm; only the separate Field ROI `_formhawk_submission` marker rotates. Failed responses continue to allow retries and abandonment under the existing CRO semantics.
 
-Assignment lasts only in memory for the current page lifecycle. Formhawk creates no cookie, local/session storage, IndexedDB record, IP dimension, fingerprint, session/visitor ID or raw event log. CRO storage contains structural configuration and aggregate counters only. It never contains submitted names, email, phone, message, uploads, recipients, subjects or bodies and uses no third-party CRO service.
+The browser keeps assignment only in memory for the current page/form lifecycle. The server stores its SHA-256 JTI hash, structural attribution, UTC expiry and bounded counters in `formhawk_cro_contexts`, never a raw token/JTI or event payload. Formhawk creates no cookie, local/session storage, IndexedDB record, IP dimension, fingerprint or persistent session/visitor ID. It never stores submitted names, email, phone, message, uploads, recipients, subjects or bodies and uses no third-party CRO service.
 
-The public CRO endpoints accept exact shallow schemas, bounded strings and request bodies. They use same-origin checks when Origin/Referer is present and atomic site-wide limits from `formhawk_cro_ingestion_limits`; no limiter key derives from visitor data. Rejected, throttled and storage counters are fixed daily aggregates visible in Diagnostics.
+The public CRO endpoints accept exact shallow schemas, bounded strings and request bodies. Explicit cross-site Origin, fallback Referer or `Sec-Fetch-Site: cross-site` is rejected; missing optional headers remain acceptable for privacy-compatible browsers. Headers are defense in depth, not authentication: non-browser clients can forge them. Site-wide limits remain 600 config / 1,200 event requests per minute by default, filtered through `formhawk_cro_ingestion_limits`.
+
+### Atomic client lifecycle (0.5.2)
+
+- `view`, `start`, `client_validation`, `js_error` and `abandon` are at most once per issued context. Validation and abandonment require a start; abandonment is rejected during an in-flight or successfully completed attempt.
+- `attempt` carries a consecutive integer `attempt` (1–50). The previous attempt must have terminated. Duplicates and gaps never increment counters.
+- `latency` carries that attempt number, integer `latency_ms` (0–300,000) and boolean `successful`. It is accepted once for the current attempt, records a terminal state and permits a subsequent independent submission.
+- Generic-only `observed_submit` is accepted once for its current attempt. Both observed submits and latency samples are bounded by attempts; neither is confirmed conversion evidence.
+- Editing after success emits one bounded `resume` for the completed attempt, with no aggregate increment. This permits genuine later abandonment without repeating start/view. Focus/reset/pagehide alone do not resume a successful lifecycle.
+- Frontend requests are serialized per context in a bounded memory queue. Analytics delivery never intercepts or blocks provider submission. Multiple DOM instances, even with the same provider form ID, receive distinct contexts through the response's `form_index` mapping.
+
+Issuance plus `assignments += 1` commits in one transaction. Event admission uses `SELECT ... FOR UPDATE` on the issued row; its flags and daily aggregate update commit or roll back together. The registry and aggregate table must both be InnoDB. Unknown, expired, duplicate and invalid lifecycle events cannot increment aggregates. A valid signature alone is insufficient.
+
+The registry is capped at 50,000 rows per site under a fixed site issuance lock. Contexts expire with the token; issuance deletes up to 1,000 expired rows, and 15-minute WP-Cron cleanup deletes up to 5,000 per batch, scheduling a one-minute continuation for a backlog. Hosts disabling WP-Cron must provide system cron; the hard capacity cap still prevents unlimited growth if maintenance stops. Failed admission leaves the original form intact. No random JTI becomes a permanent budget-store key.
+
+Diagnostics are fixed-key daily counters: `replayed_context_event`, `invalid_context_lifecycle`, `unknown_context`, `expired_context`, `duplicate_view`, `duplicate_start`, `duplicate_js_error`, `event_without_attempt`, `cro_integrity_warning`, plus existing request/storage counters. No diagnostic includes tokens, JTI, IP, field values or arbitrary request strings.
+
+Migration 7 adds `assignments` without changing `views`, and marks existing experiments `integrity_version=1`. They remain reportable and manually controllable, but cannot make automatic terminal decisions from mixed legacy evidence. Newly created version-2 experiments use protected assignment cohorts; historical assignments are never inferred from views. See [migration and recovery](MIGRATIONS.md#version-6-to-7-formhawk-052).
 
 ## Statistical methodology
 
@@ -88,7 +106,7 @@ Algorithm `beta-binomial-1.0` uses independent Jeffreys priors, `Beta(0.5, 0.5)`
 
 A winner requires every gate:
 
-- minimum views per arm;
+- minimum server-issued assignments per arm (policy keys retain `minimum_views_per_variant` for compatibility; stored browser `views` keep their reporting meaning);
 - minimum total conversions;
 - minimum runtime;
 - posterior probability threshold;
@@ -97,7 +115,7 @@ A winner requires every gate:
 
 Credible harm rejects a variant. Maximum runtime without sufficient evidence is inconclusive. Allocation remains fixed at control 50% / variant up to the configured 50%; adaptive allocation is intentionally not enabled because correctness is preferred over premature bandit behavior. Cumulative improvement compounds non-rolled-back baseline-relative lifts as `Π(1 + lift) - 1`; percentages are never added. Rolling back a winner excludes its lift from the displayed current cumulative impact.
 
-Conservative, Balanced and Aggressive presets change real sample, runtime, posterior, loss and monitoring thresholds. Filters remain bounded by hard floors: at least 100 views per arm, 20 conversions and 3 days. Policy snapshots and `algorithm_version`/`policy_version` remain with each immutable decision.
+Conservative, Balanced and Aggressive presets change real sample, runtime, posterior, loss and monitoring thresholds. Filters remain bounded by hard floors: at least 100 assignments per arm, 20 confirmed conversions and 3 days. Conversion statistics, provider guardrails, segment checks, promotion monitoring and autonomous Field ROI business-value cohorts use server-issued assignment denominators. Browser views remain observational reporting. Policy snapshots and `algorithm_version`/`policy_version` remain with each immutable decision.
 
 ## Guardrails and rollback
 
@@ -106,10 +124,9 @@ Guardrails are evaluated globally and, once each segment has enough sample, inde
 - credible confirmed-conversion harm;
 - excessive provider/mail failures;
 - provider-confirmed validation explosion;
-- browser/client validation explosion using deduplicated failures divided by started lifecycles;
-- CRO application/JS error rate;
-- material submission-latency regression;
 - corrupt/missing configuration or promotion storage failure.
+
+Browser/client validation, CRO application/JS errors and browser latency produce a bounded review warning with `CLIENT_OBSERVED` evidence. They do not route traffic, pause/reject experiments or roll back baselines on their own. `SERVER_CONFIRMED` provider signals retain automatic safety authority. Client warnings do not mask an independently triggered trusted provider guardrail.
 
 After promotion, the winner receives 100% of new assignments while post-promotion conversion is compared with the experiment control baseline. Credible relative regression restores the exact previous baseline from immutable decision ancestry, records rollback and purges compatible caches. Promote and rollback each update baseline, experiment status and traffic in one database transaction; a partial write cannot deploy a rejected mutation. Two cron workers cannot decide one form concurrently because evaluation uses a per-form database advisory lock. Traffic/storage failures fail open to the original form or last validated baseline.
 
@@ -152,7 +169,8 @@ Test forcing exists only when both `WP_DEBUG` and server-side `FORMHAWK_CRO_TEST
 ## Known conservative limitations
 
 - Dependency recognition is fail-closed and does not reverse-engineer arbitrary custom JavaScript conditions. Such forms retain control.
-- Generic HTML has observed-submit evidence only, so its result cannot be called confirmed conversion.
+- Generic HTML has advisory observed-submit evidence only; autonomous promotion/rejection/rollback is disabled. Explicit administrator actions remain available.
+- Registration and exposure accounting prevent selective browser-view reporting, not all automated traffic. A public configuration endpoint cannot prove a human visitor; site budgets, server randomization and trusted outcomes remain necessary. No visitor fingerprint is added to claim bot-proof traffic.
 - First-class/explicitly identified forms can be visually prepared for at most 1.2 seconds. Anonymous structural generic IDs cannot always be prepared before discovery, so very late theme markup may briefly show control.
 - Privacy-preserving assignment is scoped to a page lifecycle. Formhawk intentionally accepts possible repeat-visitor cross-arm exposure instead of introducing cookies or a persistent visitor identifier.
 - Baselines containing progressive disclosure or multi-step layout are followed only by presentation-compatible hypotheses; unsafe structural stacking is not attempted.

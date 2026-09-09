@@ -62,7 +62,7 @@ final class FieldROIRepository {
 		return null;
 	}
 
-	public function cohorts( array $experiment, $start, $end, $currency, $maturity_days ) {
+	public function cohorts( array $experiment, $start, $end, $currency, $maturity_days, $server_exposures = false ) {
 		$variants   = $experiment['variants'];
 		$control_id = absint( $variants[0]['id'] );
 		$variant_id = absint( $variants[1]['id'] );
@@ -73,7 +73,7 @@ final class FieldROIRepository {
 		$mature_end       = min( $end, $cutoff_date );
 		if ( $mature_end < $start ) {
 			return null; }
-		$base     = $this->experiment_traffic( $experiment['id'], $control_id, $variant_id, $start, $mature_end );
+		$base     = $this->experiment_traffic( $experiment['id'], $control_id, $variant_id, $start, $mature_end, $server_exposures );
 		$outcomes = $this->experiment_outcomes( $experiment['id'], $control_id, $variant_id, $start, $mature_end, $currency );
 		$maturing = $this->maturing_counts( $experiment['id'], $control_id, $variant_id, $start, $end );
 		foreach ( array( $control_id, $variant_id ) as $id ) {
@@ -100,7 +100,7 @@ final class FieldROIRepository {
 		return array(
 			'control'                => $base[ $control_id ],
 			'variant'                => $base[ $variant_id ],
-			'balance_cells'          => $this->experiment_balance_cells( $experiment['id'], $control_id, $variant_id, $start, $mature_end ),
+			'balance_cells'          => $this->experiment_balance_cells( $experiment['id'], $control_id, $variant_id, $start, $mature_end, $server_exposures ),
 			'mature_through'         => $mature_end,
 			'control_id'             => $control_id,
 			'variant_id'             => $variant_id,
@@ -393,9 +393,9 @@ final class FieldROIRepository {
 		);
 	}
 
-	private function experiment_traffic( $experiment_id, $control_id, $variant_id, $start, $end ) {
+	private function experiment_traffic( $experiment_id, $control_id, $variant_id, $start, $end, $server_exposures ) {
 		global $wpdb;
-		$sql = $wpdb->prepare( 'SELECT variant_id,SUM(views) visitors,SUM(confirmed_successes) submissions FROM %i WHERE experiment_id=%d AND variant_id IN (%d,%d) AND stat_date BETWEEN %s AND %s GROUP BY variant_id', Database::experiment_daily_table(), absint( $experiment_id ), $control_id, $variant_id, $start, $end );
+		$sql = $wpdb->prepare( 'SELECT variant_id,SUM(%i) visitors,SUM(confirmed_successes) submissions FROM %i WHERE experiment_id=%d AND variant_id IN (%d,%d) AND stat_date BETWEEN %s AND %s GROUP BY variant_id', $server_exposures ? 'assignments' : 'views', Database::experiment_daily_table(), absint( $experiment_id ), $control_id, $variant_id, $start, $end );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- Indexed aggregate experiment query.
 		$rows   = $wpdb->get_results( $sql, ARRAY_A );
 		$output = array();
@@ -407,9 +407,9 @@ final class FieldROIRepository {
 		return $output;
 	}
 
-	private function experiment_balance_cells( $experiment_id, $control_id, $variant_id, $start, $end ) {
+	private function experiment_balance_cells( $experiment_id, $control_id, $variant_id, $start, $end, $server_exposures ) {
 		global $wpdb;
-		$sql = $wpdb->prepare( 'SELECT stat_date,segment,variant_id,SUM(views) visitors FROM %i WHERE experiment_id=%d AND variant_id IN (%d,%d) AND stat_date BETWEEN %s AND %s GROUP BY stat_date,segment,variant_id', Database::experiment_daily_table(), absint( $experiment_id ), $control_id, $variant_id, $start, $end );
+		$sql = $wpdb->prepare( 'SELECT stat_date,segment,variant_id,SUM(%i) visitors FROM %i WHERE experiment_id=%d AND variant_id IN (%d,%d) AND stat_date BETWEEN %s AND %s GROUP BY stat_date,segment,variant_id', $server_exposures ? 'assignments' : 'views', Database::experiment_daily_table(), absint( $experiment_id ), $control_id, $variant_id, $start, $end );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- Bounded day/device balance diagnostic protects experimental inference from assignment leakage.
 		$rows  = $wpdb->get_results( $sql, ARRAY_A );
 		$cells = array();

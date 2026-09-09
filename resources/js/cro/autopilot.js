@@ -50,8 +50,8 @@ export function identity(form) {
 
 export function createAutopilot(browserWindow, browserDocument, config) {
 	if (!config || !config.configEndpoint || !config.eventsEndpoint) return null;
-	const assignments = new Map();
-	const requested = new Set();
+	const assignments = new WeakMap();
+	const requested = new WeakSet();
 	const applied = new WeakMap();
 	const tracker = createExperimentTracker(browserWindow, browserDocument, config.eventsEndpoint);
 	let mutationObserver = null;
@@ -100,8 +100,7 @@ export function createAutopilot(browserWindow, browserDocument, config) {
 
 	function apply(form) {
 		if (applied.has(form)) return;
-		const item = identity(form);
-		const assignment = assignments.get(key(item));
+		const assignment = assignments.get(form);
 		if (!assignment) return;
 		const result = applyVariant(form, assignment, config.strings || {});
 		if (!result.ok) {
@@ -126,6 +125,9 @@ export function createAutopilot(browserWindow, browserDocument, config) {
 			const result = applied.get(form);
 			if (result) result.restore();
 			applied.delete(form);
+			assignments.delete(form);
+			requested.delete(form);
+			tracker.detach(form);
 			installContextMarker(form, '');
 		});
 		load();
@@ -135,30 +137,25 @@ export function createAutopilot(browserWindow, browserDocument, config) {
 		const candidates = Array.isArray(candidateForms) ? candidateForms : forms();
 		if (pending) {
 			candidates.forEach((form) => {
-				if (!requested.has(key(identity(form)))) queuedForms.add(form);
+				if (!requested.has(form)) queuedForms.add(form);
 			});
 			return;
 		}
 		pending = true;
-		const availablePairs = Array.from(new Map(candidates.map((form) => {
-			const item = identity(form);
-			return [key(item), item];
-		})).entries()).filter(([identityKey]) => !requested.has(identityKey));
+		// A DOM instance owns its own issued lifecycle, even when provider form IDs match.
+		const availablePairs = Array.from(new Set(candidates)).filter((form) => !requested.has(form)).map((form) => [form, identity(form)]);
 		const pairs = availablePairs.slice(0, 20);
 		if (availablePairs.length > pairs.length) {
-			const deferredKeys = new Set(availablePairs.slice(20).map(([identityKey]) => identityKey));
-			candidates.forEach((form) => {
-				if (deferredKeys.has(key(identity(form)))) queuedForms.add(form);
-			});
+			availablePairs.slice(20).forEach(([form]) => queuedForms.add(form));
 		}
-		const requestKeys = pairs.map(([identityKey]) => identityKey);
+		const requestForms = pairs.map(([form]) => form);
 		const identities = pairs.map(([, item]) => item);
 		if (!identities.length) {
 			pending = false;
 			browserDocument.documentElement.classList.remove('formhawk-cro-pending');
 			return;
 		}
-		requestKeys.forEach((identityKey) => requested.add(identityKey));
+		requestForms.forEach((form) => requested.add(form));
 		const requestPath = currentPath();
 		const payload = {page_path: requestPath, segment: browserWindow.matchMedia && browserWindow.matchMedia('(max-width: 782px)').matches ? 'mobile' : 'desktop', forms: identities};
 		if (config.testMode && ['control', 'variant'].includes(config.force)) payload.force = config.force;
@@ -168,10 +165,14 @@ export function createAutopilot(browserWindow, browserDocument, config) {
 			const data = await response.json();
 			if (!data || !Array.isArray(data.assignments)) throw new Error('config_response_invalid');
 			if (initialRequest && preparationExpired) return;
-			data.assignments.forEach((assignment) => assignments.set(key(assignment, requestPath), assignment));
+			if (requestPath !== currentPath()) return;
+			data.assignments.forEach((assignment) => {
+				const form = requestForms[assignment.form_index];
+				if (form && key(identity(form), requestPath) === key(assignment, requestPath)) assignments.set(form, assignment);
+			});
 			discover();
 		} catch (error) {
-			requestKeys.forEach((identityKey) => requested.delete(identityKey));
+			requestForms.forEach((form) => requested.delete(form));
 			if (config.debug && browserWindow.console) browserWindow.console.warn('Formhawk CRO unavailable; original forms preserved.', error);
 		} finally {
 			pending = false;

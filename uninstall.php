@@ -8,6 +8,8 @@ defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 wp_clear_scheduled_hook( 'formhawk_daily_cleanup' );
 wp_clear_scheduled_hook( 'formhawk_cleanup_continue' );
 wp_clear_scheduled_hook( 'formhawk_cro_hourly_evaluation' );
+wp_clear_scheduled_hook( 'formhawk_cro_context_cleanup' );
+wp_clear_scheduled_hook( 'formhawk_cro_context_cleanup_continue' );
 wp_clear_scheduled_hook( 'formhawk_field_roi_evaluate' );
 
 $formhawk_settings = get_option( 'formhawk_settings', array() );
@@ -29,6 +31,7 @@ $formhawk_tables = array(
 	$wpdb->prefix . 'formhawk_experiments',
 	$wpdb->prefix . 'formhawk_variants',
 	$wpdb->prefix . 'formhawk_experiment_daily',
+	$wpdb->prefix . 'formhawk_cro_contexts',
 	$wpdb->prefix . 'formhawk_optimization_history',
 	$wpdb->prefix . 'formhawk_submissions',
 	$wpdb->prefix . 'formhawk_outcomes',

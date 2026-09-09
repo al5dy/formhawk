@@ -6,9 +6,16 @@ use Formhawk\Domain\ProviderCatalog;
 use Formhawk\Support\Sanitizer;
 
 final class ContextSigner {
-	const VERSION = 1;
+	const VERSION    = 2;
+	private $failure = '';
 
 	public function sign( array $context, $ttl = 7200 ) {
+		try {
+			$jti = $this->base64url_encode( random_bytes( 16 ) );
+		} catch ( \Exception $error ) {
+			return '';
+		}
+		$issued  = time();
 		$payload = array(
 			'v'   => self::VERSION,
 			'e'   => absint( $context['experiment_id'] ),
@@ -17,7 +24,9 @@ final class ContextSigner {
 			'p'   => ProviderCatalog::is_known( $context['provider'] ) ? $context['provider'] : ProviderCatalog::GENERIC,
 			'pid' => Sanitizer::identifier( $context['provider_form_id'] ),
 			's'   => in_array( $context['segment'], array( 'desktop', 'mobile' ), true ) ? $context['segment'] : 'desktop',
-			'exp' => time() + max( 300, min( DAY_IN_SECONDS, absint( $ttl ) ) ),
+			'jti' => $jti,
+			'iat' => $issued,
+			'exp' => $issued + max( 300, min( DAY_IN_SECONDS, absint( $ttl ) ) ),
 		);
 		$json    = wp_json_encode( $payload );
 		$body    = $this->base64url_encode( $json );
@@ -26,6 +35,7 @@ final class ContextSigner {
 	}
 
 	public function verify( $token ) {
+		$this->failure = 'invalid_context';
 		if ( ! is_string( $token ) || strlen( $token ) > 1000 || ! preg_match( '/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/', $token ) ) {
 			return null;
 		}
@@ -36,13 +46,21 @@ final class ContextSigner {
 		}
 		$json = $this->base64url_decode( $parts[0] );
 		$data = false !== $json ? json_decode( $json, true ) : null;
-		if ( ! is_array( $data ) || self::VERSION !== (int) ( $data['v'] ?? 0 ) || time() > (int) ( $data['exp'] ?? 0 ) ) {
+		if ( ! is_array( $data ) || self::VERSION !== ( $data['v'] ?? 0 ) ) {
 			return null;
 		}
-		$required = array( 'v', 'e', 'r', 'f', 'p', 'pid', 's', 'exp' );
+		$required = array( 'v', 'e', 'r', 'f', 'p', 'pid', 's', 'jti', 'iat', 'exp' );
 		if ( count( $data ) !== count( $required ) || array_diff( $required, array_keys( $data ) ) || ! is_int( $data['e'] ) || ! is_int( $data['r'] ) || ! is_int( $data['f'] ) || $data['e'] < 1 || $data['r'] < 1 || $data['f'] < 1 || ! is_string( $data['p'] ) || ! ProviderCatalog::is_known( $data['p'] ) || ! is_string( $data['pid'] ) || Sanitizer::identifier( $data['pid'] ) !== $data['pid'] || ! in_array( $data['s'], array( 'desktop', 'mobile' ), true ) ) {
 			return null;
 		}
+		if ( ! is_string( $data['jti'] ) || ! preg_match( '/^[A-Za-z0-9_-]{22}$/D', $data['jti'] ) || $this->base64url_encode( $this->base64url_decode( $data['jti'] ) ) !== $data['jti'] || ! is_int( $data['iat'] ) || ! is_int( $data['exp'] ) || $data['iat'] > time() || $data['iat'] < 1 || $data['exp'] - $data['iat'] < 300 || $data['exp'] - $data['iat'] > DAY_IN_SECONDS ) {
+			return null;
+		}
+		if ( $data['exp'] <= time() ) {
+			$this->failure = 'expired_context';
+			return null;
+		}
+		$this->failure = '';
 		return array(
 			'experiment_id'    => absint( $data['e'] ),
 			'variant_id'       => absint( $data['r'] ),
@@ -50,11 +68,18 @@ final class ContextSigner {
 			'provider'         => $data['p'],
 			'provider_form_id' => $data['pid'],
 			'segment'          => $data['s'],
+			'jti'              => $data['jti'],
+			'iat'              => $data['iat'],
+			'exp'              => $data['exp'],
 		);
 	}
 
+	public function last_failure() {
+		return $this->failure;
+	}
+
 	private function key() {
-		return hash_hmac( 'sha256', 'formhawk-cro-context-v1|' . home_url( '/' ), wp_salt( 'auth' ), true );
+		return hash_hmac( 'sha256', 'formhawk-cro-context-v2|' . home_url( '/' ), wp_salt( 'auth' ), true );
 	}
 
 	private function base64url_encode( $value ) {

@@ -1,22 +1,43 @@
 export function createExperimentTracker(browserWindow, browserDocument, endpoint) {
 	const states = new WeakMap();
 	const active = new Set();
+	const queues = new Map();
+	const maxAttempts = 50;
 	let observer = null;
 	let jqueryBound = false;
 
-	function send(context, type, latencyMs) {
+	function send(context, type, details = {}) {
 		if (!context || typeof browserWindow.fetch !== 'function') return;
-		const payload = {context, type};
-		if (Number.isInteger(latencyMs) && latencyMs >= 0) payload.latency_ms = Math.min(300000, latencyMs);
+		const payload = {context, type, ...details};
+		let queue = queues.get(context);
+		if (!queue) {
+			queue = {items: [], sending: false};
+			queues.set(context, queue);
+		}
+		if (queue.items.length >= 256) return;
+		queue.items.push(payload);
+		drain(context, queue);
+	}
+
+	function drain(context, queue) {
+		if (queue.sending || !queue.items.length) return;
+		queue.sending = true;
+		const payload = queue.items.shift();
+		const done = () => {
+			queue.sending = false;
+			if (queue.items.length) drain(context, queue); else queues.delete(context);
+		};
+		// Serialize this assignment's observations so terminal events cannot overtake attempts.
+		// Failed telemetry is never allowed to delay or intercept the customer's submission.
 		try {
-			browserWindow.fetch(endpoint, {
+			Promise.resolve(browserWindow.fetch(endpoint, {
 				method: 'POST',
 				headers: {'Content-Type': 'application/json'},
 				credentials: 'same-origin',
 				keepalive: true,
 				body: JSON.stringify(payload),
-			}).catch(() => {});
-		} catch {}
+			})).then(done, done);
+		} catch { done(); }
 	}
 
 	function viewed(form, state) {
@@ -29,7 +50,7 @@ export function createExperimentTracker(browserWindow, browserDocument, endpoint
 	function attach(form, assignment) {
 		bindJqueryProviderEvents();
 		if (!assignment.context || states.has(form)) return;
-		const state = {context: assignment.context, provider: assignment.provider, started: false, attempted: false, completed: false, abandoned: false, validation: false, viewed: false, submittedAt: 0};
+		const state = {context: assignment.context, provider: assignment.provider, started: false, attempted: false, completed: false, abandoned: false, validation: false, viewed: false, submittedAt: 0, sequence: 0};
 		states.set(form, state);
 		active.add(form);
 		const start = () => {
@@ -39,40 +60,59 @@ export function createExperimentTracker(browserWindow, browserDocument, endpoint
 			}
 		};
 		const edit = () => {
+			if (state.completed) send(state.context, 'resume', {attempt: state.sequence});
 			state.completed = false;
 			start();
 		};
 		form.addEventListener('focusin', start, {capture: true});
 		form.addEventListener('input', edit, {capture: true});
 		form.addEventListener('change', edit, {capture: true});
-		form.addEventListener('invalid', () => {
+		const invalid = () => {
 			edit();
 			if (!state.validation) {
 				state.validation = true;
 				send(state.context, 'client_validation');
 			}
-		}, {capture: true});
-		form.addEventListener('submit', () => {
-			if (state.attempted) return;
+		};
+		const submit = () => {
+			if (state.attempted || state.sequence >= maxAttempts) return;
 			start();
 			state.completed = false;
 			state.attempted = true;
 			state.submittedAt = Date.now();
-			send(state.context, 'attempt');
-			if (state.provider === 'html') send(state.context, 'observed_submit');
-		}, {capture: true});
+			state.sequence += 1;
+			send(state.context, 'attempt', {attempt: state.sequence});
+			if (state.provider === 'html') send(state.context, 'observed_submit', {attempt: state.sequence});
+		};
+		form.addEventListener('invalid', invalid, {capture: true});
+		form.addEventListener('submit', submit, {capture: true});
+		state.detach = () => {
+			form.removeEventListener('focusin', start, true);
+			form.removeEventListener('input', edit, true);
+			form.removeEventListener('change', edit, true);
+			form.removeEventListener('invalid', invalid, true);
+			form.removeEventListener('submit', submit, true);
+		};
 		if (observer) observer.observe(form); else viewed(form, state);
 	}
 
 	function terminal(form, successful = true) {
 		const state = states.get(form);
 		if (!state || !state.attempted) return;
-		send(state.context, 'latency', Date.now() - state.submittedAt);
+		send(state.context, 'latency', {attempt: state.sequence, latency_ms: Math.max(0, Math.min(300000, Date.now() - state.submittedAt)), successful: Boolean(successful)});
 		state.submittedAt = 0;
 		// Only an in-flight attempt accepts a terminal callback. A later submit
 		// re-arms it without changing the page's experiment assignment or start.
 		state.attempted = false;
 		state.completed = successful;
+	}
+
+	function detach(form) {
+		const state = states.get(form);
+		if (state) state.detach();
+		if (observer) observer.unobserve(form);
+		states.delete(form);
+		active.delete(form);
 	}
 
 	function providerForm(event) {
@@ -124,9 +164,11 @@ export function createExperimentTracker(browserWindow, browserDocument, endpoint
 
 	return Object.freeze({
 		attach,
+		detach,
 		send,
 		terminal,
 		destroy() {
+			active.forEach(detach);
 			if (observer) observer.disconnect();
 			browserDocument.removeEventListener('wpcf7submit', domCF7Terminal);
 			browserDocument.removeEventListener('submit_success', domElementorTerminal);

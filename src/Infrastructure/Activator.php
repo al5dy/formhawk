@@ -3,6 +3,7 @@
 namespace Formhawk\Infrastructure;
 
 use Formhawk\CRO\AutopilotManager;
+use Formhawk\CRO\Attribution\ContextCleanup;
 use Formhawk\ROI\FieldROIScheduler;
 
 final class Activator {
@@ -10,6 +11,9 @@ final class Activator {
 
 	public static function activate() {
 		Database::install();
+		if ( Database::cro_schema_is_current() ) {
+			( new ContextCleanup() )->register();
+		}
 		if ( ! get_option( 'formhawk_install_time' ) ) {
 			add_option( 'formhawk_install_time', time(), '', false );
 		}
@@ -25,6 +29,8 @@ final class Activator {
 	}
 
 	public static function deactivate() {
+		wp_clear_scheduled_hook( ContextCleanup::HOOK );
+		wp_clear_scheduled_hook( ContextCleanup::CONTINUE_HOOK );
 		wp_clear_scheduled_hook( self::CRON_HOOK );
 		wp_clear_scheduled_hook( Cleanup::CONTINUE_HOOK );
 		wp_clear_scheduled_hook( AutopilotManager::CRON_HOOK );

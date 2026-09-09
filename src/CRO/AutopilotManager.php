@@ -80,7 +80,7 @@ final class AutopilotManager {
 			$this->experiments->touch_evaluated( $form_id );
 			return $result;
 		}
-		if ( in_array( $experiment['status'], array( ExperimentStatus::AWAITING_APPROVAL, ExperimentStatus::SUGGESTED ), true ) && 'full' === $settings['mode'] ) {
+		if ( in_array( $experiment['status'], array( ExperimentStatus::AWAITING_APPROVAL, ExperimentStatus::SUGGESTED ), true ) && 'full' === $settings['mode'] && DecisionEvidence::allows_autonomy( $experiment, $form['provider'] ) ) {
 			$started = $this->experiments->start( $experiment['id'] );
 			if ( $started ) {
 				// A cached page may predate this experiment and therefore omit the runtime entirely.
@@ -93,6 +93,9 @@ final class AutopilotManager {
 	}
 
 	private function create_next( array $form, array $settings ) {
+		if ( 'full' === $settings['mode'] && ! ProviderCatalog::has_server_success( $form['provider'] ) ) {
+			$settings['mode'] = 'approve';
+		}
 		$excluded    = array_merge( $this->experiments->completed_opportunities( $form['id'] ), $this->baseline_exclusions( $settings['baseline'] ) );
 		$opportunity = $this->opportunities->detect( $form, array_values( array_unique( $excluded ) ) );
 		if ( ! $opportunity ) {
@@ -142,17 +145,21 @@ final class AutopilotManager {
 	}
 
 	private function evaluate_running( array $form, array $settings, array $experiment ) {
+		if ( ! $this->autonomous_evidence_available( $form, $experiment ) ) {
+			return true;
+		}
 		$variants = $this->experiments->variants( $experiment['id'] );
 		$totals   = $this->experiments->aggregate( $experiment['id'] );
 		if ( count( $variants ) !== 2 ) {
 			$this->experiments->route_to_control( $experiment['id'] );
 			return $this->finish( $form, $settings, $experiment, 'stopped_guardrail', 'corrupt_variant_configuration' );
 		}
-		$control      = $this->metrics( $totals[ $variants[0]['id'] ] ?? array(), $experiment['primary_metric'] );
-		$variant      = $this->metrics( $totals[ $variants[1]['id'] ] ?? array(), $experiment['primary_metric'] );
+		$control      = $this->metrics( $totals[ $variants[0]['id'] ] ?? array() );
+		$variant      = $this->metrics( $totals[ $variants[1]['id'] ] ?? array() );
 		$guard_policy = $this->guardrail_policy( $experiment );
 		$guard        = $this->guardrails->evaluate( $control, $variant, $guard_policy );
-		if ( $guard['triggered'] ) {
+		$this->record_advisory( $experiment, $guard );
+		if ( $guard['triggered'] && DecisionEvidence::SERVER_CONFIRMED === $guard['evidence'] ) {
 			$this->experiments->route_to_control( $experiment['id'] );
 			$this->experiments->set_status( $experiment['id'], ExperimentStatus::PAUSED_GUARDRAIL );
 			$this->cache->purge();
@@ -163,13 +170,14 @@ final class AutopilotManager {
 			if ( ! isset( $segment_totals[ $variants[0]['id'] ], $segment_totals[ $variants[1]['id'] ] ) ) {
 				continue;
 			}
-			$segment_control = $this->metrics( $segment_totals[ $variants[0]['id'] ], $experiment['primary_metric'] );
-			$segment_variant = $this->metrics( $segment_totals[ $variants[1]['id'] ], $experiment['primary_metric'] );
-			if ( $segment_control['views'] < $experiment['policy']['guardrail_minimum_views'] || $segment_variant['views'] < $experiment['policy']['guardrail_minimum_views'] ) {
+			$segment_control = $this->metrics( $segment_totals[ $variants[0]['id'] ] );
+			$segment_variant = $this->metrics( $segment_totals[ $variants[1]['id'] ] );
+			if ( $segment_control['assignments'] < $experiment['policy']['guardrail_minimum_views'] || $segment_variant['assignments'] < $experiment['policy']['guardrail_minimum_views'] ) {
 				continue;
 			}
 			$segment_guard = $this->guardrails->evaluate( $segment_control, $segment_variant, $guard_policy );
-			if ( $segment_guard['triggered'] ) {
+			$this->record_advisory( $experiment, $segment_guard );
+			if ( $segment_guard['triggered'] && DecisionEvidence::SERVER_CONFIRMED === $segment_guard['evidence'] ) {
 				$this->experiments->route_to_control( $experiment['id'] );
 				$this->cache->purge();
 				do_action( 'formhawk_cro_variant_rejected', $experiment['id'], $variants[1]['id'], 'segment_' . $segment . '_' . $segment_guard['reason'] );
@@ -179,7 +187,7 @@ final class AutopilotManager {
 		$days     = $this->runtime_days( $experiment['started_at_utc'] );
 		$analysis = in_array( $experiment['primary_metric'], array( 'business_value', 'qualified_leads', 'won_leads' ), true )
 			? $this->business_winners->select( $experiment, $variants, $experiment['policy'], $settings, $days )
-			: $this->winners->select( $control, $variant, $experiment['policy'], $days );
+			: $this->winners->select( DecisionEvidence::server_sample( $control ), DecisionEvidence::server_sample( $variant ), $experiment['policy'], $days );
 		if ( 'winner' === $analysis['decision'] ) {
 			$baseline = isset( $variants[1]['config']['mutations'] ) && is_array( $variants[1]['config']['mutations'] ) ? $variants[1]['config']['mutations'] : array();
 			if ( ! $this->experiments->promote_experiment( $form['id'], $experiment['id'], $variants[1]['id'], $baseline ) ) {
@@ -199,6 +207,9 @@ final class AutopilotManager {
 	}
 
 	private function evaluate_promotion( array $form, array $settings, array $experiment ) {
+		if ( ! $this->autonomous_evidence_available( $form, $experiment ) ) {
+			return true;
+		}
 		$monitor_days = $this->runtime_days( $experiment['ended_at_utc'] );
 		if ( $monitor_days < 1 ) {
 			return true;
@@ -208,11 +219,12 @@ final class AutopilotManager {
 		if ( count( $variants ) !== 2 || ! $experiment['winner_variant_id'] ) {
 			return false;
 		}
-		$control = $this->metrics( $totals[ $variants[0]['id'] ] ?? array(), $experiment['primary_metric'] );
+		$control = $this->metrics( $totals[ $variants[0]['id'] ] ?? array() );
 		$since   = $this->day_after_utc( $experiment['ended_at_utc'] );
-		$current = $this->metrics( $this->experiments->aggregate_since( $experiment['id'], $experiment['winner_variant_id'], $since ), $experiment['primary_metric'] );
+		$current = $this->metrics( $this->experiments->aggregate_since( $experiment['id'], $experiment['winner_variant_id'], $since ) );
 		$guard   = $this->guardrails->evaluate( $control, $current, $this->guardrail_policy( $experiment ) );
-		if ( $guard['triggered'] ) {
+		$this->record_advisory( $experiment, $guard );
+		if ( $guard['triggered'] && DecisionEvidence::SERVER_CONFIRMED === $guard['evidence'] ) {
 			if ( ! $this->experiments->rollback_experiment( $form['id'], $experiment['id'] ) ) {
 				return false;
 			}
@@ -221,10 +233,10 @@ final class AutopilotManager {
 			do_action( 'formhawk_cro_rollback', $experiment['id'], $experiment['winner_variant_id'] );
 			return true;
 		}
-		if ( ! $this->is_business_metric( $experiment['primary_metric'] ) && $current['views'] >= $experiment['policy']['minimum_views_per_variant'] && $control['views'] >= $experiment['policy']['minimum_views_per_variant'] ) {
-			$analysis     = $this->winners->select( $control, $current, array_merge( $experiment['policy'], array( 'minimum_runtime_days' => 1 ) ), $monitor_days );
-			$relative     = $control['conversions'] / max( 1, $control['views'] );
-			$current_rate = $current['conversions'] / max( 1, $current['views'] );
+		if ( ! $this->is_business_metric( $experiment['primary_metric'] ) && $current['assignments'] >= $experiment['policy']['minimum_views_per_variant'] && $control['assignments'] >= $experiment['policy']['minimum_views_per_variant'] ) {
+			$analysis     = $this->winners->select( DecisionEvidence::server_sample( $control ), DecisionEvidence::server_sample( $current ), array_merge( $experiment['policy'], array( 'minimum_runtime_days' => 1 ) ), $monitor_days );
+			$relative     = $control['conversions'] / max( 1, $control['assignments'] );
+			$current_rate = $current['conversions'] / max( 1, $current['assignments'] );
 			if ( $relative > 0 && $current_rate < $relative * ( 1 - $experiment['policy']['rollback_relative_drop'] ) && ( 1 - $analysis['probability_to_be_best'] ) >= $experiment['policy']['probability_to_be_best'] ) {
 				if ( ! $this->experiments->rollback_experiment( $form['id'], $experiment['id'] ) ) {
 					return false;
@@ -279,10 +291,25 @@ final class AutopilotManager {
 		);
 	}
 
-	private function metrics( array $row, $primary_metric ) {
+	private function metrics( array $row ) {
 		$row['views']       = absint( $row['views'] ?? 0 );
-		$row['conversions'] = 'observed_submit_rate' === $primary_metric ? absint( $row['observed_submits'] ?? 0 ) : absint( $row['confirmed_successes'] ?? 0 );
+		$row['assignments'] = absint( $row['assignments'] ?? 0 );
+		$row['conversions'] = absint( $row['confirmed_successes'] ?? 0 );
 		return $row;
+	}
+
+	private function autonomous_evidence_available( array $form, array $experiment ) {
+		if ( DecisionEvidence::allows_autonomy( $experiment, $form['provider'] ) ) {
+			return true;
+		}
+		$this->experiments->integrity_warning( $experiment['id'], (int) ( $experiment['integrity_version'] ?? 1 ) < 2 ? 'legacy_experiment_review' : 'confirmed_evidence_required' );
+		return false;
+	}
+
+	private function record_advisory( array $experiment, array $guard ) {
+		if ( ! empty( $guard['warnings'] ) ) {
+			$this->experiments->integrity_warning( $experiment['id'], 'client_telemetry_review' );
+		}
 	}
 
 	private function primary_metric( array $form, array $settings ) {

@@ -12,6 +12,7 @@
 /tools/phpstan-bootstrap.php
 /tools/benchmark-migration.php
 /tools/benchmark-field-roi.php
+/tools/benchmark-cro-integrity.php
 /.playwright-cli
 /output
 /coverage
