@@ -38,6 +38,6 @@ final class IntegrationRegistry {
 
 	public function has_capability( $provider, $capability ) {
 		$integration = $this->get( $provider );
-		return $integration && in_array( $capability, $integration->capabilities(), true );
+		return $integration && $integration->is_available() && in_array( $capability, $integration->capabilities(), true );
 	}
 }

@@ -7,7 +7,7 @@ use Formhawk\CRO\Experiments\ExperimentType;
 final class VariantGenerator {
 	private $registry;
 
-	public function __construct( MutationRegistry $registry = null ) {
+	public function __construct( ?MutationRegistry $registry = null ) {
 		$this->registry = $registry ? $registry : new MutationRegistry();
 	}
 
@@ -32,9 +32,14 @@ final class VariantGenerator {
 		 * @param array $opportunity Ranked opportunity.
 		 */
 		$candidate = apply_filters( 'formhawk_cro_variant', $candidate, $form, $opportunity );
-		if ( ! is_array( $candidate ) || ! isset( $candidate['type'], $candidate['config'] ) ) {
+		if ( ! is_array( $candidate ) || ! isset( $candidate['type'], $candidate['config'] ) || $type !== $candidate['type'] || ! is_array( $candidate['config'] ) ) {
 			return null;
 		}
+		$config = $mutation->normalize( $candidate['config'] );
+		if ( ! is_array( $config ) ) {
+			return null;
+		}
+		$candidate['config'] = $config;
 
 		return array(
 			'control' => array(
@@ -56,6 +61,23 @@ final class VariantGenerator {
 				return array( 'field_order' => array( '__all_except_target__', $opportunity['field_key'] ) );
 			case ExperimentType::PROGRESSIVE_DISCLOSURE:
 				return array( 'fields' => array( $opportunity['field_key'] ) );
+			case ExperimentType::REMOVE_FIELD:
+				return array(
+					'field_key'           => $opportunity['field_key'],
+					'safety'              => isset( $opportunity['safety'] ) ? $opportunity['safety'] : '',
+					'dependency_verified' => ! empty( $opportunity['dependency_verified'] ),
+				);
+			case ExperimentType::MAKE_OPTIONAL:
+				return array(
+					'field_key'                   => $opportunity['field_key'],
+					'provider_semantics_verified' => ! empty( $opportunity['provider_semantics_verified'] ),
+				);
+			case ExperimentType::MAKE_REQUIRED:
+				return array(
+					'field_key'                   => $opportunity['field_key'],
+					'provider_semantics_verified' => ! empty( $opportunity['provider_semantics_verified'] ),
+					'risk_authorized'             => ! empty( $opportunity['risk_authorized'] ),
+				);
 			case ExperimentType::MULTI_STEP:
 				return array( 'steps' => array( array( '__first_half__' ), array( '__second_half__' ) ) );
 			case ExperimentType::SUBMIT_BUTTON:

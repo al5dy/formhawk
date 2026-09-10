@@ -1,4 +1,4 @@
-const FORBIDDEN_PATTERN = /(?:password|passcode|payment|card(?:number)?|\bcvv\b|\bcvc\b|otp|captcha|recaptcha|turnstile|hcaptcha|nonce|csrf|terms|privacy|gdpr|consent|agreement|signature|auth(?:entication)?|login|security)/i;
+const FORBIDDEN_PATTERN = /(?:password|passcode|payment|card(?:number)?|credit|debit|\bcvv\b|\bcvc\b|expir(?:y|ation)|bank|iban|swift|otp|2fa|captcha|recaptcha|turnstile|hcaptcha|nonce|csrf|honeypot|terms|privacy|gdpr|consent|agreement|signature|medical|health|diagnos|ssn|social[_ -]?security|auth(?:entication)?|login|security)/i;
 const CONDITIONAL_SELECTOR = '[data-condition], [data-conditional], [data-conditional-logic], [data-dependency], [data-depends-on], [aria-controls], .wpforms-conditional-show, .wpforms-conditional-hide, .wpcf7cf-hidden, .wpcf7cf-show, .elementor-field-type-step';
 const SECURITY_SELECTOR = 'input[type="password"], input[type="file"], [class*="captcha"], [class*="recaptcha"], [class*="turnstile"], [class*="hcaptcha"], [data-sitekey]';
 let stepInstance = 0;
@@ -70,7 +70,7 @@ export function classifyField(field, provider = 'html') {
 	if (field.required || attribute(field, 'aria-required') === 'true') {
 		return 'PROTECTED';
 	}
-	if (['checkbox', 'radio', 'date', 'time'].includes(type)) {
+	if (['checkbox', 'radio', 'date', 'time', 'tel', 'number'].includes(type) || /(?:phone|mobile|budget|company|address|country|state|postal|zip|job[_ -]?title|qualification)/i.test(structuralDescriptor)) {
 		return 'CAUTION';
 	}
 	return 'SAFE';
@@ -80,18 +80,29 @@ export function inspectForm(form, provider) {
 	if (!form || form.querySelector(SECURITY_SELECTOR) || form.querySelector(CONDITIONAL_SELECTOR)) {
 		return {safeStructure: false, fields: []};
 	}
-	const keys = new Set();
-	const units = new Set();
+	const indexed = new Map();
+	const units = new Map();
 	const fields = [];
 	for (const field of trackableFields(form)) {
 		const key = providerFieldKey(field, provider);
 		const unit = fieldUnit(field, provider);
-		if (!key || !unit || keys.has(key) || units.has(unit)) {
+		if (!key || !unit) {
 			return {safeStructure: false, fields: []};
 		}
-		keys.add(key);
-		units.add(unit);
-		fields.push({key, field, unit, classification: classifyField(field, provider)});
+		if (indexed.has(key)) {
+			const existing = indexed.get(key);
+			if (existing.unit !== unit) return {safeStructure: false, fields: []};
+			existing.controls.push(field);
+			const classification = classifyField(field, provider);
+			const rank = {SAFE: 0, CAUTION: 1, PROTECTED: 2, FORBIDDEN: 3};
+			if (rank[classification] > rank[existing.classification]) existing.classification = classification;
+			continue;
+		}
+		if (units.has(unit) && units.get(unit) !== key) return {safeStructure: false, fields: []};
+		const item = {key, field, controls: [field], unit, classification: classifyField(field, provider)};
+		indexed.set(key, item);
+		units.set(unit, key);
+		fields.push(item);
 	}
 	return {safeStructure: fields.length > 0, fields};
 }
@@ -123,7 +134,7 @@ function applyFieldOrder(form, provider, config, restores) {
 	const requested = Array.isArray(config.field_order) ? config.field_order : [];
 	const target = requested[requested.length - 1];
 	const targetField = inspection.fields.find((item) => item.key === target);
-	if (!targetField || targetField.classification !== 'SAFE') {
+	if (!targetField || !['SAFE', 'CAUTION'].includes(targetField.classification)) {
 		throw new Error('unsafe_reorder_target');
 	}
 	const slots = inspection.fields.map((item) => appendRestoreAnchor(item.unit, restores));
@@ -141,7 +152,7 @@ function applyProgressive(form, provider, config, restores, strings) {
 	const inspection = inspectForm(form, provider);
 	const keys = Array.isArray(config.fields) ? config.fields : [];
 	const selected = keys.map((key) => inspection.fields.find((item) => item.key === key)).filter(Boolean);
-	if (!inspection.safeStructure || selected.length !== keys.length || selected.some((item) => item.classification !== 'SAFE')) {
+	if (!inspection.safeStructure || selected.length !== keys.length || selected.some((item) => !['SAFE', 'CAUTION'].includes(item.classification))) {
 		throw new Error('unsafe_progressive_fields');
 	}
 	const details = form.ownerDocument.createElement('details');
@@ -156,6 +167,74 @@ function applyProgressive(form, provider, config, restores, strings) {
 	const first = submitControls(form)[0];
 	(first && first.parentNode ? first.parentNode : form).insertBefore(details, first || null);
 	restores.push(() => details.remove());
+}
+
+export function applyRemoveField(form, provider, config, restores) {
+	const inspection = inspectForm(form, provider);
+	const target = inspection.fields.find((item) => item.key === config.field_key);
+	const allowed = config.safety === 'caution' ? ['SAFE', 'CAUTION'] : ['SAFE'];
+	if (!config.dependency_verified || !inspection.safeStructure || !target || !allowed.includes(target.classification) || target.controls.some((control) => control.required || attribute(control, 'aria-required') === 'true') || hasExternalReferences(form, target)) {
+		throw new Error('unsafe_remove_field');
+	}
+	appendRestoreAnchor(target.unit, restores);
+	target.unit.remove();
+}
+
+function hasExternalReferences(form, target) {
+	const ids = Array.from(target.unit.querySelectorAll('[id]'));
+	if (target.unit.id) ids.push(target.unit);
+	const values = new Set(ids.map((node) => attribute(node, 'id')).filter(Boolean));
+	if (!values.size) return false;
+	return Array.from(form.querySelectorAll('label[for], [aria-describedby], [aria-labelledby], [aria-controls]')).some((node) => {
+		if (target.unit.contains(node)) return false;
+		if (node.tagName === 'LABEL' && values.has(attribute(node, 'for'))) return true;
+		return ['aria-describedby', 'aria-labelledby', 'aria-controls'].some((name) => attribute(node, name).split(/\s+/).some((id) => values.has(id)));
+	});
+}
+
+export function applyMakeOptional(form, provider, config, restores) {
+	const inspection = inspectForm(form, provider);
+	const target = inspection.fields.find((item) => item.key === config.field_key);
+	if (!config.provider_semantics_verified || !inspection.safeStructure || !target || target.classification === 'FORBIDDEN') {
+		throw new Error('unsafe_make_optional');
+	}
+	target.controls.forEach((control) => {
+		const required = control.required;
+		const requiredAttribute = control.getAttribute('required');
+		const ariaRequired = control.getAttribute('aria-required');
+		control.required = false;
+		control.removeAttribute('required');
+		control.setAttribute('aria-required', 'false');
+		restores.push(() => {
+			control.required = required;
+			if (requiredAttribute === null) control.removeAttribute('required'); else control.setAttribute('required', requiredAttribute);
+			if (ariaRequired === null) control.removeAttribute('aria-required'); else control.setAttribute('aria-required', ariaRequired);
+		});
+	});
+	target.unit.classList.add('formhawk-cro-optional');
+	restores.push(() => target.unit.classList.remove('formhawk-cro-optional'));
+}
+
+export function applyMakeRequired(form, provider, config, restores) {
+	const inspection = inspectForm(form, provider);
+	const target = inspection.fields.find((item) => item.key === config.field_key);
+	if (!config.provider_semantics_verified || !config.risk_authorized || !inspection.safeStructure || !target || target.classification === 'FORBIDDEN') {
+		throw new Error('unsafe_make_required');
+	}
+	const controls = target.controls.filter((control) => !['checkbox', 'radio'].includes(attribute(control, 'type').toLowerCase()));
+	if (controls.length !== 1) throw new Error('ambiguous_required_control');
+	const control = controls[0];
+	const required = control.required;
+	const requiredAttribute = control.getAttribute('required');
+	const ariaRequired = control.getAttribute('aria-required');
+	control.required = true;
+	control.setAttribute('required', '');
+	control.setAttribute('aria-required', 'true');
+	restores.push(() => {
+		control.required = required;
+		if (requiredAttribute === null) control.removeAttribute('required'); else control.setAttribute('required', requiredAttribute);
+		if (ariaRequired === null) control.removeAttribute('aria-required'); else control.setAttribute('aria-required', ariaRequired);
+	});
 }
 
 function clearChildren(node) {
@@ -364,6 +443,9 @@ export function applyVariant(form, assignment, strings = {}) {
 				case 'submit_button': applySubmitButton(form, mutation.config, restores); break;
 				case 'label_presentation': applyPresentationClass(form, `formhawk-labels-${mutation.config.position}`, restores); break;
 				case 'placeholder_presentation': applyPresentationClass(form, `formhawk-placeholders-${mutation.config.mode}`, restores); break;
+				case 'remove_field': applyRemoveField(form, assignment.provider, mutation.config, restores); break;
+				case 'make_optional': applyMakeOptional(form, assignment.provider, mutation.config, restores); break;
+				case 'make_required': applyMakeRequired(form, assignment.provider, mutation.config, restores); break;
 				default: throw new Error('unsupported_mutation');
 			}
 		}

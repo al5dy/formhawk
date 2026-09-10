@@ -100,6 +100,28 @@ Diagnostics are fixed-key daily counters: `replayed_context_event`, `invalid_con
 
 Migration 7 adds `assignments` without changing `views`, and marks existing experiments `integrity_version=1`. They remain reportable and manually controllable, but cannot make automatic terminal decisions from mixed legacy evidence. Newly created version-2 experiments use protected assignment cohorts; historical assignments are never inferred from views. See [migration and recovery](MIGRATIONS.md#version-6-to-7-formhawk-052).
 
+### Server-confirmed conversion replay safety (0.6.0)
+
+Schema v8 adds `provider_success` to the expiring context row. A trusted provider
+callback must atomically consume that bit and increment `confirmed_successes` in the
+same transaction. Duplicate callbacks return `duplicate_event`; they do not create a
+second binary CRO conversion. Independent later provider submissions keep separate
+opaque submission/outcome rows, so business-outcome attribution is not collapsed into
+the binary assignment metric.
+
+`StatisticalEngine` no longer clamps an impossible `conversions > assignments` input.
+It returns `integrity_failure` with null estimates. Autopilot and Minimum Form then
+pause, route traffic to control and prohibit promotion.
+
+### Minimum Viable Form orchestration (0.6.0)
+
+Minimum Form owns semantic `REMOVE_FIELD`, `MAKE_OPTIONAL` and `MAKE_REQUIRED`
+strategies while reusing this assignment, attribution, guardrail and promotion stack.
+Only one semantic experiment may own a form at once. Winning mutation stacks become
+immutable versioned baselines and are monitored after promotion; a credible delayed
+business-value regression restores the parent baseline. Full safety, provider and
+extension contracts are documented in [MINIMUM-FORM.md](MINIMUM-FORM.md).
+
 ## Statistical methodology
 
 Algorithm `beta-binomial-1.0` uses independent Jeffreys priors, `Beta(0.5, 0.5)`, for the two Bernoulli arms. It reports posterior means, 95% credible intervals, probability that variant is better, relative/absolute expected lift and expected loss. Small samples use deterministic numerical Beta integration; sufficiently large samples use the normal approximation to the posterior difference. Page-lifecycle randomization is cache-neutral and does not create a persistent identity; repeated visits can therefore enter different arms, an intentional privacy tradeoff documented below.

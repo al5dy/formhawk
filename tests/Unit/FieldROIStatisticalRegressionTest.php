@@ -41,6 +41,16 @@ final class FieldROIStatisticalRegressionTest extends TestCase {
 		$this->assertLessThan( 1000000000, $result['winsor_limit_minor'] );
 	}
 
+	public function test_single_extreme_variant_deal_does_not_create_a_premature_winner() {
+		$control = array_fill( 0, 20, 10000 );
+		$variant = array_merge( array_fill( 0, 19, 10000 ), array( 1000000000 ) );
+		$result  = ( new FieldValueModel() )->compare( $control, 5000, $variant, 5000, 37 );
+		$this->assertGreaterThan( $result['control_rpv_minor'], $result['variant_rpv_minor'], 'Actual RPV remains available for reporting.' );
+		$this->assertLessThan( 0.75, $result['probability_beneficial'], 'Winsorized inference must not promote from one extreme deal.' );
+		$this->assertLessThanOrEqual( 0, $result['robust_interval_minor'][0] );
+		$this->assertGreaterThanOrEqual( 0, $result['robust_interval_minor'][1] );
+	}
+
 	public function test_missing_outcome_coverage_caps_confidence() {
 		$confidence = ( new ConfidenceCalculator() )->calculate(
 			array(

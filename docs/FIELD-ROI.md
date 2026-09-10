@@ -287,22 +287,23 @@ Actions:
 Arguments contain opaque IDs, structural IDs, aggregate metrics or canonical
 outcomes. Formhawk never adds submitted values to these hooks.
 
-## Known boundaries in 0.5.2
+## Known boundaries in 0.6.0
 
 - Generic HTML forms have no universal provider-confirmed success and are not
   eligible for outcome attribution or Field ROI claims.
 - Optional-field “supplied versus skipped” cohorts are not inferred because the
   privacy contract forbids reading values. Provider-native presence/requiredness
-  experiments are not shipped in 0.5.2; Formhawk will not simulate them by only
-  changing browser validation while the server schema remains unchanged.
+  experiments require an adapter that proves reversible server semantics; the
+  built-in 0.6.0 adapters do not simulate them by only changing browser validation
+  while the server schema remains unchanged.
 - Structural schema snapshots are collected at confirmed submission. They are not
   yet sufficient for adjusted quasi-experimental EVPV and are not presented as such.
 - UTM/campaign capture and new-versus-returning segmentation are not enabled; no
   arbitrary query string or persistent identity is stored.
 - Automated provider form-definition promotion remains limited to existing safe,
   reversible runtime Autopilot mutations. Provider definitions are never rewritten.
-- Post-promotion monitoring in 0.5.2 retains trusted provider guardrails (client-only
-  telemetry requests review, not automatic rollback), but a
-  delayed business-outcome regression does not yet trigger an automatic rollback.
-  The immutable decision history preserves the evidence for review.
+- Post-promotion monitoring in 0.6.0 retains trusted provider guardrails (client-only
+  telemetry requests review, not automatic rollback) and adds delayed
+  business-outcome regression rollback to the previous validated Minimum Form
+  baseline. The immutable decision history preserves both promotion and rollback.
 - No FX conversion is performed. Each currency is evaluated separately.

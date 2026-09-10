@@ -27,7 +27,7 @@ final class FieldValueModel {
 			$differences[] = $v_mean - $c_mean;
 		}
 		sort( $differences, SORT_NUMERIC );
-		$beneficial = count(
+		$beneficial    = count(
 			array_filter(
 				$differences,
 				static function ( $value ) {
@@ -35,12 +35,21 @@ final class FieldValueModel {
 				}
 			)
 		);
+		$expected_loss = array_sum(
+			array_map(
+				static function ( $difference ) {
+					return max( 0, -$difference );
+				},
+				$differences
+			)
+		) / $iterations;
 		return array(
 			'model_version'          => self::MODEL_VERSION,
 			'control_rpv_minor'      => $c_actual,
 			'variant_rpv_minor'      => $v_actual,
 			'impact_rpv_minor'       => $v_actual - $c_actual,
 			'probability_beneficial' => $beneficial / $iterations,
+			'expected_loss_minor'    => $expected_loss,
 			'robust_interval_minor'  => array( $differences[12], $differences[487] ),
 			'winsor_limit_minor'     => $cap,
 			'control_revenue_minor'  => $c_total,

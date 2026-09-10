@@ -4,6 +4,7 @@ namespace Formhawk\Tests\Integration;
 
 use Formhawk\Analytics\FormRepository;
 use Formhawk\CRO\Attribution\AttributingEventRecorder;
+use Formhawk\CRO\Attribution\ContextStore;
 use Formhawk\CRO\Attribution\RequestContext;
 use Formhawk\CRO\AutopilotManager;
 use Formhawk\CRO\ExperimentRepository;
@@ -307,17 +308,21 @@ final class AutopilotIntegrationTest extends IsolatedStorageTestCase {
 		);
 		$repository->set_status( $experiment_id, ExperimentStatus::RUNNING, array( 'started_at_utc' => current_time( 'mysql', true ) ) );
 		$variants = $repository->variants( $experiment_id );
-		$context  = new RequestContext();
-		$context->set_verified_context(
-			array(
-				'experiment_id'    => $experiment_id,
-				'variant_id'       => absint( $variants[1]['id'] ),
-				'form_id'          => $form_id,
-				'provider'         => 'wpforms',
-				'provider_form_id' => '88',
-				'segment'          => 'mobile',
-			)
+		$claims   = array(
+			'experiment_id'    => $experiment_id,
+			'variant_id'       => absint( $variants[1]['id'] ),
+			'form_id'          => $form_id,
+			'provider'         => 'wpforms',
+			'provider_form_id' => '88',
+			'segment'          => 'mobile',
+			'jti'              => 'AAAAAAAAAAAAAAAAAAAAAA',
+			'iat'              => time(),
+			'exp'              => time() + 3600,
 		);
+		$store    = new ContextStore( $repository );
+		$this->assertTrue( $store->issue( $claims ) );
+		$context = new RequestContext( null, $store );
+		$context->set_verified_context( $claims );
 		$inner    = new RecordingEventRecorder();
 		$recorder = new AttributingEventRecorder( $inner, $context, $repository );
 		$this->assertTrue( $recorder->record_success( 'wpforms', '88', 'Lead', '/lead' ) );

@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
 final class IntegrationRegistryTest extends TestCase {
 	public function test_only_available_integrations_register() {
 		$available   = new IntegrationDouble( 'available', true, array( 'server_success' ) );
-		$unavailable = new IntegrationDouble( 'unavailable', false );
+		$unavailable = new IntegrationDouble( 'unavailable', false, array( 'server_success' ) );
 		$registry    = new IntegrationRegistry( array( $available, $unavailable ) );
 
 		$registry->register();

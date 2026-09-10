@@ -18,28 +18,28 @@ final class ProviderCROCapabilities {
 
 		$matrix = array(
 			ProviderCatalog::CF7       => array(
-				'mutations'         => $presentation,
+				'mutations'         => array_merge( $presentation, array( ExperimentType::REMOVE_FIELD ) ),
 				'confirmed_success' => true,
 				'server_validation' => true,
 				'server_failure'    => true,
 				'evidence_level'    => 'provider_confirmed',
 			),
 			ProviderCatalog::WPFORMS   => array(
-				'mutations'         => $presentation,
+				'mutations'         => array_merge( $presentation, array( ExperimentType::REMOVE_FIELD ) ),
 				'confirmed_success' => true,
 				'server_validation' => true,
 				'server_failure'    => false,
 				'evidence_level'    => 'provider_confirmed',
 			),
 			ProviderCatalog::ELEMENTOR => array(
-				'mutations'         => $presentation,
+				'mutations'         => array_merge( $presentation, array( ExperimentType::REMOVE_FIELD ) ),
 				'confirmed_success' => true,
 				'server_validation' => true,
 				'server_failure'    => true,
 				'evidence_level'    => 'provider_confirmed',
 			),
 			ProviderCatalog::GENERIC   => array(
-				'mutations'         => $presentation,
+				'mutations'         => array_merge( $presentation, array( ExperimentType::REMOVE_FIELD ) ),
 				'confirmed_success' => false,
 				'server_validation' => false,
 				'server_failure'    => false,

@@ -91,6 +91,74 @@ describe('runtime mutations', () => {
 		expect(form.querySelector('details')).toBeNull();
 	});
 
+	it('removes exactly one safe provider field from presentation and payload, then restores it', () => {
+		document.body.innerHTML = '<form class="wpforms-form" id="wpforms-form-42"><div class="wpforms-field" data-field-id="1"><input name="wpforms[fields][1]" value="A"></div><div class="wpforms-field" data-field-id="2"><input name="wpforms[fields][2]" value="B"></div><div class="wpforms-field" data-field-id="3"><input name="wpforms[fields][3]" value="C"></div><button type="submit">Submit</button></form>';
+		const form = document.querySelector('form');
+		const config = assignment('wpforms', [{type: 'remove_field', config: {field_key: '2', safety: 'safe', dependency_verified: true}}]);
+		const result = applyVariant(form, config);
+		expect(result.ok).toBe(true);
+		expect(Array.from(new FormData(form).entries())).toEqual([
+			['wpforms[fields][1]', 'A'],
+			['wpforms[fields][3]', 'C'],
+		]);
+		expect(applyVariant(form, config).reused).toBe(true);
+		result.restore();
+		expect(Array.from(new FormData(form).entries())).toEqual([
+			['wpforms[fields][1]', 'A'],
+			['wpforms[fields][2]', 'B'],
+			['wpforms[fields][3]', 'C'],
+		]);
+	});
+
+	it('blocks field removal for required controls and unknown dependencies', () => {
+		document.body.innerHTML = '<form><div class="form-group"><input name="email" required></div><div class="form-group"><input name="notes"></div></form>';
+		let result = applyVariant(document.querySelector('form'), assignment('html', [{type: 'remove_field', config: {field_key: 'email', safety: 'safe', dependency_verified: true}}]));
+		expect(result.ok).toBe(false);
+		expect(document.querySelector('[name="email"]')).not.toBeNull();
+		result = applyVariant(document.querySelector('form'), assignment('html', [{type: 'remove_field', config: {field_key: 'notes', safety: 'safe'}}]));
+		expect(result.ok).toBe(false);
+		expect(document.querySelector('[name="notes"]')).not.toBeNull();
+		document.body.innerHTML = '<form><div class="form-group" data-depends-on="service"><input name="notes"></div></form>';
+		result = applyVariant(document.querySelector('form'), assignment('html', [{type: 'remove_field', config: {field_key: 'notes', safety: 'safe', dependency_verified: true}}]));
+		expect(result.ok).toBe(false);
+		expect(document.querySelector('[name="notes"]')).not.toBeNull();
+	});
+
+	it('blocks removal when another accessible control references the target unit', () => {
+		document.body.innerHTML = '<form><div class="form-group" id="company-field"><input name="company"></div><button type="button" aria-describedby="company-field">Help</button></form>';
+		const form = document.querySelector('form');
+		const result = applyVariant(form, assignment('html', [{type: 'remove_field', config: {field_key: 'company', safety: 'caution', dependency_verified: true}}]));
+		expect(result.ok).toBe(false);
+		expect(form.elements.company).not.toBeNull();
+	});
+
+	it('makes a provider-verified required field optional with accessible reversible semantics', () => {
+		document.body.innerHTML = '<form><div class="form-group"><label for="message">Message</label><textarea id="message" name="message" required aria-required="true"></textarea></div></form>';
+		const form = document.querySelector('form');
+		const result = applyVariant(form, assignment('html', [{type: 'make_optional', config: {field_key: 'message', provider_semantics_verified: true}}]));
+		expect(result.ok).toBe(true);
+		expect(form.elements.message.required).toBe(false);
+		expect(form.elements.message.getAttribute('aria-required')).toBe('false');
+		result.restore();
+		expect(form.elements.message.required).toBe(true);
+		expect(form.elements.message.getAttribute('aria-required')).toBe('true');
+	});
+
+	it('requires explicit provider verification and risk authorization before making a field required', () => {
+		document.body.innerHTML = '<form><div class="form-group"><input name="budget"></div></form>';
+		const form = document.querySelector('form');
+		const blocked = applyVariant(form, assignment('html', [{type: 'make_required', config: {field_key: 'budget', provider_semantics_verified: true}}]));
+		expect(blocked.ok).toBe(false);
+		expect(form.elements.budget.required).toBe(false);
+		const result = applyVariant(form, assignment('html', [{type: 'make_required', config: {field_key: 'budget', provider_semantics_verified: true, risk_authorized: true}}]));
+		expect(result.ok).toBe(true);
+		expect(form.elements.budget.required).toBe(true);
+		expect(form.elements.budget.getAttribute('aria-required')).toBe('true');
+		result.restore();
+		expect(form.elements.budget.required).toBe(false);
+		expect(form.elements.budget.hasAttribute('aria-required')).toBe(false);
+	});
+
 	it('applies and restores label and placeholder presentation strategies', () => {
 		document.body.innerHTML = '<form><label>Email<input name="email"></label><button type="submit">Submit</button></form>';
 		const form = document.querySelector('form');

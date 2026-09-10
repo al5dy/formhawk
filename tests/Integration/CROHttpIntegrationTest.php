@@ -120,7 +120,7 @@ final class CROHttpIntegrationTest extends IsolatedStorageTestCase {
 				$this->assertTrue( $recorder->record_success( $provider, 'wrong-form', 'Wrong form', '/lead' ) );
 			}
 			$totals = $repository->aggregate( $id )[ $assignment['variant_id'] ];
-			$this->assertSame( 2, $totals['confirmed_successes'] );
+			$this->assertSame( 1, $totals['confirmed_successes'] );
 			$this->assertSame( 1, $totals['assignments'] );
 			$this->assertSame( 0, $totals['views'], 'Trusted provider callbacks do not require browser telemetry to arrive.' );
 		}
@@ -222,6 +222,9 @@ final class CROHttpIntegrationTest extends IsolatedStorageTestCase {
 				return false;
 			}
 			public function consume( array $context, $type, $attempt = 0, $latency = null, $successful = false ) {
+				return 'storage_failures';
+			}
+			public function consume_provider_success( array $context ) {
 				return 'storage_failures';
 			}
 		};

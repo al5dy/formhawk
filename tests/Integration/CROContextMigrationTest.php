@@ -8,6 +8,7 @@ use Formhawk\Infrastructure\Database;
 use Formhawk\Infrastructure\Migrations\Version5;
 use Formhawk\Infrastructure\Migrations\Version6;
 use Formhawk\Infrastructure\Migrations\Version7;
+use Formhawk\Infrastructure\Migrations\Version8;
 use Formhawk\Tests\Fixtures\IsolatedStorageTestCase;
 
 final class CROContextMigrationTest extends IsolatedStorageTestCase {
@@ -18,8 +19,9 @@ final class CROContextMigrationTest extends IsolatedStorageTestCase {
 		// An interrupted previous process already added one of the target columns.
 		$wpdb->query( $wpdb->prepare( 'ALTER TABLE %i ADD COLUMN assignments bigint(20) unsigned NOT NULL DEFAULT 0', Database::experiment_daily_table() ) );
 		Database::maybe_upgrade();
-		$this->assertSame( '7', (string) get_option( 'formhawk_db_version' ) );
+		$this->assertSame( '8', (string) get_option( 'formhawk_db_version' ) );
 		$this->assertTrue( Version7::is_current() );
+		$this->assertTrue( Version8::is_current() );
 		$this->assertTrue( Version7::run() );
 		$this->assertTrue( Version7::run() );
 		$totals = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM %i WHERE experiment_id=1', Database::experiment_daily_table() ), ARRAY_A );
@@ -50,7 +52,7 @@ final class CROContextMigrationTest extends IsolatedStorageTestCase {
 			$wpdb->suppress_errors( $previous );
 		}
 		Database::maybe_upgrade();
-		$this->assertSame( '7', (string) get_option( 'formhawk_db_version' ) );
+		$this->assertSame( '8', (string) get_option( 'formhawk_db_version' ) );
 		$this->assertSame( '100', $wpdb->get_var( $wpdb->prepare( 'SELECT views FROM %i WHERE experiment_id=1', Database::experiment_daily_table() ) ) );
 	}
 

@@ -7,22 +7,39 @@ final class StatisticalEngine {
 	const ALGORITHM_VERSION = 'beta-binomial-1.0';
 
 	public function evaluate( array $control, array $variant, array $policy, $runtime_days ) {
-		$c_views = max( 0, (int) ( $control['views'] ?? 0 ) );
-		$v_views = max( 0, (int) ( $variant['views'] ?? 0 ) );
-		$c_conv  = min( $c_views, max( 0, (int) ( $control['conversions'] ?? 0 ) ) );
-		$v_conv  = min( $v_views, max( 0, (int) ( $variant['conversions'] ?? 0 ) ) );
-		$alpha   = (float) $policy['prior_alpha'];
-		$beta    = (float) $policy['prior_beta'];
-		$c_a     = $c_conv + $alpha;
-		$c_b     = $c_views - $c_conv + $beta;
-		$v_a     = $v_conv + $alpha;
-		$v_b     = $v_views - $v_conv + $beta;
-		$c_mean  = $c_a / ( $c_a + $c_b );
-		$v_mean  = $v_a / ( $v_a + $v_b );
-		$prob    = $this->probability_greater( $v_a, $v_b, $c_a, $c_b );
-		$loss    = $this->expected_loss( $c_mean, $this->beta_variance( $c_a, $c_b ), $v_mean, $this->beta_variance( $v_a, $v_b ) );
-		$lift    = $c_mean > 0 ? ( $v_mean - $c_mean ) / $c_mean : null;
-		$result  = array(
+		$policy  = array_merge( ( new OptimizationPolicy() )->presets()['balanced'], $policy );
+		$c_views = (int) ( $control['views'] ?? 0 );
+		$v_views = (int) ( $variant['views'] ?? 0 );
+		$c_conv  = (int) ( $control['conversions'] ?? 0 );
+		$v_conv  = (int) ( $variant['conversions'] ?? 0 );
+		if ( $c_views < 0 || $v_views < 0 || $c_conv < 0 || $v_conv < 0 || $c_conv > $c_views || $v_conv > $v_views ) {
+			return array(
+				'algorithm_version'      => self::ALGORITHM_VERSION,
+				'control_rate'           => null,
+				'variant_rate'           => null,
+				'probability_to_be_best' => null,
+				'expected_lift'          => null,
+				'absolute_lift'          => null,
+				'expected_loss'          => null,
+				'control_interval'       => null,
+				'variant_interval'       => null,
+				'decision'               => 'integrity_failure',
+				'reason'                 => 'conversions_exceed_assignments',
+				'data_integrity_valid'   => false,
+			);
+		}
+		$alpha  = max( 0.1, (float) $policy['prior_alpha'] );
+		$beta   = max( 0.1, (float) $policy['prior_beta'] );
+		$c_a    = $c_conv + $alpha;
+		$c_b    = $c_views - $c_conv + $beta;
+		$v_a    = $v_conv + $alpha;
+		$v_b    = $v_views - $v_conv + $beta;
+		$c_mean = $c_a / ( $c_a + $c_b );
+		$v_mean = $v_a / ( $v_a + $v_b );
+		$prob   = $this->probability_greater( $v_a, $v_b, $c_a, $c_b );
+		$loss   = $this->expected_loss( $c_mean, $this->beta_variance( $c_a, $c_b ), $v_mean, $this->beta_variance( $v_a, $v_b ) );
+		$lift   = $c_mean > 0 ? ( $v_mean - $c_mean ) / $c_mean : null;
+		$result = array(
 			'algorithm_version'      => self::ALGORITHM_VERSION,
 			'control_rate'           => $c_mean,
 			'variant_rate'           => $v_mean,
@@ -34,6 +51,7 @@ final class StatisticalEngine {
 			'variant_interval'       => $this->credible_interval( $v_a, $v_b ),
 			'decision'               => 'collecting',
 			'reason'                 => 'minimum_sample',
+			'data_integrity_valid'   => true,
 		);
 
 		if ( $c_views < $policy['minimum_views_per_variant'] || $v_views < $policy['minimum_views_per_variant'] ) {

@@ -12,7 +12,7 @@ final class ContextStore implements CROContextStoreInterface {
 	const MAX_CONTEXTS = 50000;
 	private $experiments;
 
-	public function __construct( ExperimentRepository $experiments = null ) {
+	public function __construct( ?ExperimentRepository $experiments = null ) {
 		$this->experiments = $experiments ? $experiments : new ExperimentRepository();
 	}
 
@@ -80,6 +80,31 @@ final class ContextStore implements CROContextStoreInterface {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- The locked lifecycle and its aggregates commit or roll back together.
 		$updated = $wpdb->update( Database::cro_contexts_table(), $transition['changes'], array( 'context_hash' => $row['context_hash'] ), array_fill( 0, count( $transition['changes'] ), '%d' ), array( '%s' ) );
 		if ( false === $updated || ( $transition['increments'] && ! $this->experiments->increment( $context['experiment_id'], $context['variant_id'], $context['segment'], $transition['increments'] ) ) ) {
+			$this->transaction( 'ROLLBACK' );
+			return 'storage_failures';
+		}
+		return $this->commit() ? 'accepted' : 'storage_failures';
+	}
+
+	public function consume_provider_success( array $context ) {
+		global $wpdb;
+		if ( ! $this->transaction( 'START TRANSACTION' ) ) {
+			return 'storage_failures';
+		}
+		// The issuance row is the idempotency record for this binary conversion.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Fresh row lock is required for cross-request provider callback replay safety.
+		$row = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM %i WHERE context_hash=%s FOR UPDATE', Database::cro_contexts_table(), hash( 'sha256', $context['jti'] ) ), ARRAY_A );
+		if ( ! is_array( $row ) || ! $this->matches( $row, $context ) || $context['exp'] <= time() ) {
+			$this->transaction( 'ROLLBACK' );
+			return is_array( $row ) ? 'invalid_context_lifecycle' : 'unknown_context';
+		}
+		if ( ! empty( $row['provider_success'] ) ) {
+			$this->transaction( 'ROLLBACK' );
+			return 'duplicate_event';
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Context bit and aggregate conversion must commit together.
+		$updated = $wpdb->update( Database::cro_contexts_table(), array( 'provider_success' => 1 ), array( 'context_hash' => $row['context_hash'] ), array( '%d' ), array( '%s' ) );
+		if ( false === $updated || ! $this->experiments->increment( $context['experiment_id'], $context['variant_id'], $context['segment'], array( 'confirmed_successes' => 1 ) ) ) {
 			$this->transaction( 'ROLLBACK' );
 			return 'storage_failures';
 		}

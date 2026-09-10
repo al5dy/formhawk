@@ -77,6 +77,44 @@ final class ExperimentRepository {
 		return $row;
 	}
 
+	/** Restores the exact runtime configuration captured before Minimum Form started. */
+	public function restore_settings( $form_id, array $settings ) {
+		global $wpdb;
+		$normalized = $this->normalize_settings( $settings );
+		$required   = array( 'mode', 'aggressiveness', 'optimization_objective', 'max_experimental_traffic', 'min_duration_days', 'min_conversions', 'currency' );
+		if ( array_diff( $required, array_keys( $normalized ) ) || ! isset( $settings['baseline'], $settings['previous_baseline'] ) || ! is_array( $settings['baseline'] ) || ! is_array( $settings['previous_baseline'] ) ) {
+			return false;
+		}
+		$baseline_json = wp_json_encode( array_values( $settings['baseline'] ) );
+		$previous_json = wp_json_encode( array_values( $settings['previous_baseline'] ) );
+		if ( false === $baseline_json || false === $previous_json || strlen( $baseline_json ) > 16384 || strlen( $previous_json ) > 16384 ) {
+			return false;
+		}
+		$state = isset( $settings['state'] ) && in_array( $settings['state'], array( 'collecting', 'active', 'monitoring', 'paused' ), true ) ? $settings['state'] : 'active';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- Explicit Minimum Form shutdown restores one previously captured Formhawk-owned runtime row.
+		$updated = $wpdb->update(
+			Database::cro_forms_table(),
+			array(
+				'mode'                     => $normalized['mode'],
+				'state'                    => $state,
+				'aggressiveness'           => $normalized['aggressiveness'],
+				'optimization_objective'   => $normalized['optimization_objective'],
+				'max_experimental_traffic' => $normalized['max_experimental_traffic'],
+				'min_duration_days'        => $normalized['min_duration_days'],
+				'min_conversions'          => $normalized['min_conversions'],
+				'lead_value'               => null === ( $normalized['lead_value'] ?? null ) ? 0 : $normalized['lead_value'],
+				'currency'                 => $normalized['currency'],
+				'baseline_json'            => $baseline_json,
+				'previous_baseline_json'   => $previous_json,
+				'updated_at_utc'           => current_time( 'mysql', true ),
+			),
+			array( 'form_id' => absint( $form_id ) ),
+			array( '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%s' ),
+			array( '%d' )
+		);
+		return false !== $updated;
+	}
+
 	public function enabled_forms( $limit = 100 ) {
 		global $wpdb;
 		$sql = $wpdb->prepare(
@@ -123,21 +161,24 @@ final class ExperimentRepository {
 		$inserted      = $wpdb->insert(
 			Database::experiments_table(),
 			array(
-				'form_id'           => absint( $experiment['form_id'] ),
-				'type'              => sanitize_key( $experiment['type'] ),
-				'status'            => sanitize_key( $experiment['status'] ),
-				'hypothesis'        => sanitize_text_field( $experiment['hypothesis'] ),
-				'primary_metric'    => sanitize_key( $experiment['primary_metric'] ),
-				'evidence_level'    => sanitize_key( $experiment['evidence_level'] ),
-				'segment_scope'     => 'all',
-				'policy_json'       => wp_json_encode( $experiment['policy'] ),
-				'algorithm_version' => StatisticalEngine::ALGORITHM_VERSION,
-				'policy_version'    => OptimizationPolicy::VERSION,
-				'created_at_utc'    => $now,
-				'updated_at_utc'    => $now,
-				'integrity_version' => 2,
+				'form_id'                  => absint( $experiment['form_id'] ),
+				'type'                     => sanitize_key( $experiment['type'] ),
+				'status'                   => sanitize_key( $experiment['status'] ),
+				'hypothesis'               => sanitize_text_field( $experiment['hypothesis'] ),
+				'primary_metric'           => sanitize_key( $experiment['primary_metric'] ),
+				'evidence_level'           => sanitize_key( $experiment['evidence_level'] ),
+				'segment_scope'            => 'all',
+				'policy_json'              => wp_json_encode( $experiment['policy'] ),
+				'algorithm_version'        => StatisticalEngine::ALGORITHM_VERSION,
+				'policy_version'           => OptimizationPolicy::VERSION,
+				'created_at_utc'           => $now,
+				'updated_at_utc'           => $now,
+				'integrity_version'        => 2,
+				'minimum_form_run_id'      => isset( $experiment['minimum_form_run_id'] ) ? absint( $experiment['minimum_form_run_id'] ) : null,
+				'minimum_form_baseline_id' => isset( $experiment['minimum_form_baseline_id'] ) ? absint( $experiment['minimum_form_baseline_id'] ) : null,
+				'field_definition_id'      => isset( $experiment['field_definition_id'] ) ? absint( $experiment['field_definition_id'] ) : null,
 			),
-			array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d' )
+			array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d' )
 		);
 		$experiment_id = $inserted ? (int) $wpdb->insert_id : 0;
 		if ( ! $experiment_id ) {
@@ -473,7 +514,7 @@ final class ExperimentRepository {
 	/** Bounded review flag: no attacker-controlled reason or repeated history entries. */
 	public function integrity_warning( $experiment_id, $reason ) {
 		global $wpdb;
-		if ( ! in_array( $reason, array( 'client_telemetry_review', 'legacy_experiment_review', 'confirmed_evidence_required' ), true ) ) {
+		if ( ! in_array( $reason, array( 'client_telemetry_review', 'legacy_experiment_review', 'confirmed_evidence_required', 'experiment_math_invalid', 'schema_drift' ), true ) ) {
 			return;
 		}
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- A single fixed review flag per experiment; duplicate evaluations do not inflate diagnostics.

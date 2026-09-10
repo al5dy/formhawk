@@ -77,6 +77,26 @@ Labels are captured on discovery and use only the label's own text nodes; nested
 - Generic HTML remains advisory and never gains Field ROI/provider-confirmed attribution. It can be observed and manually approved/promoted; Full Autopilot cannot decide from browser submit reports.
 - Regression coverage includes HMAC/issuance/expiry, REST lifecycle replay, two independent concurrent database connections, provider attribution across repeated requests, migration/recovery, protected statistical denominators and fail-open frontend mutations. This release does not add a new claim of real-provider browser E2E coverage.
 
+## 0.6.0 Minimum Form capability contract
+
+Minimum Form requires both provider-confirmed success and a provider-definition
+dependency graph before it can create an automatic semantic experiment. Contact Form
+7 and WPForms advertise removal only for optional, independent fields after checking
+required flags, conditionals and detectable mail/action/CRM/calculation mappings.
+Unknown dependencies fail closed.
+
+Elementor Pro supplies confirmed outcomes but not a complete public dependency graph,
+so 0.6.0 does not autonomously simplify it. Generic HTML has neither universal server
+confirmation nor a provider dependency definition and remains ineligible. The runtime
+has separate reversible remove/optional/required strategies, but the built-in adapters
+do not advertise optional/required semantics; Formhawk never suppresses provider
+validation to manufacture success. See [Minimum Viable Form](MINIMUM-FORM.md).
+
+One issued CRO context contributes at most one binary confirmed conversion even when a
+provider repeats its callback. Later independent provider submissions retain separate
+opaque submission IDs and outcome rows. This separates experiment conversion math from
+submission/outcome volume without storing visitor values.
+
 ## 0.5.1 resubmission regression verification (2026-09-08)
 
 - Reproduced the original defect before implementation: 13 JS regressions failed, including unchanged markers for all three providers and missing second CRO attempts. A separate database regression reproduced silent acceptance of conflicting provider entry IDs.

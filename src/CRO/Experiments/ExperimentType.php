@@ -9,6 +9,9 @@ final class ExperimentType {
 	const SUBMIT_BUTTON            = 'submit_button';
 	const LABEL_PRESENTATION       = 'label_presentation';
 	const PLACEHOLDER_PRESENTATION = 'placeholder_presentation';
+	const REMOVE_FIELD             = 'remove_field';
+	const MAKE_OPTIONAL            = 'make_optional';
+	const MAKE_REQUIRED            = 'make_required';
 
 	public static function all() {
 		return array(
@@ -18,6 +21,9 @@ final class ExperimentType {
 			self::SUBMIT_BUTTON,
 			self::LABEL_PRESENTATION,
 			self::PLACEHOLDER_PRESENTATION,
+			self::REMOVE_FIELD,
+			self::MAKE_OPTIONAL,
+			self::MAKE_REQUIRED,
 		);
 	}
 }

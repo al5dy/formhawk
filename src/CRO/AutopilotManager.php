@@ -6,6 +6,8 @@ use Formhawk\Analytics\FormRepository;
 use Formhawk\CRO\Experiments\ExperimentStatus;
 use Formhawk\CRO\Experiments\ExperimentType;
 use Formhawk\Domain\ProviderCatalog;
+use Formhawk\MinimumForm\MinimumFormRepository;
+use Formhawk\MinimumForm\BusinessObjectiveResolver;
 
 final class AutopilotManager {
 	const CRON_HOOK = 'formhawk_cro_hourly_evaluation';
@@ -20,7 +22,7 @@ final class AutopilotManager {
 	private $cache;
 	private $business_winners;
 
-	public function __construct( ExperimentRepository $experiments = null, FormRepository $forms = null, OpportunityDetector $opportunities = null, HypothesisEngine $hypotheses = null, VariantGenerator $variants = null, OptimizationPolicy $policy = null, GuardrailEvaluator $guardrails = null, WinnerSelector $winners = null, CacheCoordinator $cache = null, BusinessValueWinnerSelector $business_winners = null ) {
+	public function __construct( ?ExperimentRepository $experiments = null, ?FormRepository $forms = null, ?OpportunityDetector $opportunities = null, ?HypothesisEngine $hypotheses = null, ?VariantGenerator $variants = null, ?OptimizationPolicy $policy = null, ?GuardrailEvaluator $guardrails = null, ?WinnerSelector $winners = null, ?CacheCoordinator $cache = null, ?BusinessValueWinnerSelector $business_winners = null ) {
 		$this->experiments      = $experiments ? $experiments : new ExperimentRepository();
 		$this->forms            = $forms ? $forms : new FormRepository();
 		$this->opportunities    = $opportunities ? $opportunities : new OpportunityDetector();
@@ -59,6 +61,12 @@ final class AutopilotManager {
 	}
 
 	private function evaluate_locked( $form_id ) {
+		// Semantic optimization owns the form-level experiment lane while enabled.
+		// Existing presentation history/settings remain untouched and resume only
+		// after Minimum Form is explicitly disabled.
+		if ( ( new MinimumFormRepository() )->active_run( $form_id ) ) {
+			return true;
+		}
 		$settings   = $this->experiments->settings( $form_id );
 		$form       = $this->forms->find( $form_id );
 		$experiment = $this->experiments->active_for_form( $form_id );
@@ -159,6 +167,14 @@ final class AutopilotManager {
 		$guard_policy = $this->guardrail_policy( $experiment );
 		$guard        = $this->guardrails->evaluate( $control, $variant, $guard_policy );
 		$this->record_advisory( $experiment, $guard );
+		if ( 'conversions_exceed_assignments' === $guard['reason'] ) {
+			$this->experiments->route_to_control( $experiment['id'] );
+			$this->experiments->set_status( $experiment['id'], ExperimentStatus::PAUSED_GUARDRAIL );
+			$this->experiments->integrity_warning( $experiment['id'], 'experiment_math_invalid' );
+			$this->cache->purge();
+			$this->history( $form, $experiment, 'integrity_failure', array( 'reason' => $guard['reason'] ), $settings['baseline'], $settings['baseline'] );
+			return true;
+		}
 		if ( $guard['triggered'] && DecisionEvidence::SERVER_CONFIRMED === $guard['evidence'] ) {
 			$this->experiments->route_to_control( $experiment['id'] );
 			$this->experiments->set_status( $experiment['id'], ExperimentStatus::PAUSED_GUARDRAIL );
@@ -321,7 +337,12 @@ final class AutopilotManager {
 			$objective = isset( $field_roi['objective'] ) ? $field_roi['objective'] : 'business_value';
 			$objective = 'qualified' === $objective ? 'qualified_leads' : ( 'won' === $objective ? 'won_leads' : $objective );
 		}
-		return in_array( $objective, array( 'business_value', 'qualified_leads', 'won_leads' ), true ) ? $objective : 'confirmed_conversion';
+		if ( in_array( $objective, array( 'business_value', 'qualified_leads', 'won_leads' ), true ) ) {
+			$requested = 'business_value' === $objective ? 'revenue_per_visitor' : $objective;
+			$currency  = isset( $settings['currency'] ) ? $settings['currency'] : 'USD';
+			return ( new BusinessObjectiveResolver() )->resolve( $form['id'], $requested, $currency )['metric'];
+		}
+		return 'confirmed_conversion';
 	}
 
 	private function guardrail_policy( array $experiment ) {

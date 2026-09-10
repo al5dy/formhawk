@@ -116,6 +116,17 @@ export function createAutopilot(browserWindow, browserDocument, config) {
 		forms(root).forEach(apply);
 	}
 
+	function refreshApplied(event) {
+		const target = event && event.target && event.target.nodeType === 1 ? event.target : null;
+		const form = target ? (target.matches('form') ? target : (target.closest('form') || target.querySelector('form'))) : null;
+		if (!form || !applied.has(form) || !assignments.has(form)) return;
+		const previous = applied.get(form);
+		if (previous) previous.restore();
+		applied.delete(form);
+		tracker.detach(form);
+		apply(form);
+	}
+
 	function resetForNavigation() {
 		const path = currentPath();
 		if (path === lastPath) return;
@@ -189,6 +200,7 @@ export function createAutopilot(browserWindow, browserDocument, config) {
 		load(null, true);
 		browserWindow.addEventListener('popstate', resetForNavigation);
 		browserDocument.addEventListener('formhawk:navigation', resetForNavigation);
+		['wpcf7invalid', 'wpcf7reset', 'wpformsAjaxSubmitSuccess', 'formhawk:form-rerendered'].forEach((name) => browserDocument.addEventListener(name, refreshApplied));
 		try {
 			if (typeof browserWindow.MutationObserver === 'function' && browserDocument.body) {
 				mutationObserver = new browserWindow.MutationObserver((records) => {
@@ -213,7 +225,7 @@ export function createAutopilot(browserWindow, browserDocument, config) {
 		browserDocument.documentElement.classList.remove('formhawk-cro-pending');
 	}, 1200);
 	if (browserDocument.readyState === 'loading') browserDocument.addEventListener('DOMContentLoaded', init, {once: true}); else init();
-	return Object.freeze({refresh: load, destroy() { browserWindow.clearTimeout(failOpenTimer); browserWindow.removeEventListener('popstate', resetForNavigation); browserDocument.removeEventListener('formhawk:navigation', resetForNavigation); if (mutationObserver) mutationObserver.disconnect(); tracker.destroy(); }});
+	return Object.freeze({refresh: load, destroy() { browserWindow.clearTimeout(failOpenTimer); browserWindow.removeEventListener('popstate', resetForNavigation); browserDocument.removeEventListener('formhawk:navigation', resetForNavigation); ['wpcf7invalid', 'wpcf7reset', 'wpformsAjaxSubmitSuccess', 'formhawk:form-rerendered'].forEach((name) => browserDocument.removeEventListener(name, refreshApplied)); if (mutationObserver) mutationObserver.disconnect(); tracker.destroy(); }});
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && window.FormhawkCROConfig) {

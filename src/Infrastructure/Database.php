@@ -6,6 +6,7 @@ use Formhawk\Infrastructure\Migrations\Version4;
 use Formhawk\Infrastructure\Migrations\Version5;
 use Formhawk\Infrastructure\Migrations\Version6;
 use Formhawk\Infrastructure\Migrations\Version7;
+use Formhawk\Infrastructure\Migrations\Version8;
 
 final class Database {
 	public static function dimension_lock_name() {
@@ -113,11 +114,20 @@ final class Database {
 	public static function business_audit_table() {
 		global $wpdb;
 		return $wpdb->prefix . 'formhawk_business_audit'; }
+	public static function minimum_form_runs_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_minimum_form_runs'; }
+	public static function minimum_form_baselines_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_minimum_form_baselines'; }
+	public static function minimum_form_decisions_table() {
+		global $wpdb;
+		return $wpdb->prefix . 'formhawk_minimum_form_decisions'; }
 
 	public static function install() {
 		self::install_core_schema();
 		self::install_placement_schema();
-		$migrated = Version4::run() && Version5::run() && Version6::run() && Version7::run();
+		$migrated = Version4::run() && Version5::run() && Version6::run() && Version7::run() && Version8::run();
 
 		if ( $migrated && self::tables_exist() && self::schema_is_current() ) {
 			update_option( 'formhawk_db_version', FORMHAWK_DB_VERSION, false );
@@ -169,6 +179,10 @@ final class Database {
 		}
 		if ( version_compare( $installed_version, '6', '>=' ) && version_compare( $installed_version, '7', '<' ) && Version7::run() ) {
 			update_option( 'formhawk_db_version', '7', false );
+			$installed_version = '7';
+		}
+		if ( version_compare( $installed_version, '7', '>=' ) && version_compare( $installed_version, '8', '<' ) && Version8::run() ) {
+			update_option( 'formhawk_db_version', '8', false );
 		}
 	}
 
@@ -315,7 +329,7 @@ final class Database {
 	}
 
 	public static function schema_is_current() {
-		return self::core_schema_is_current() && self::cro_schema_is_current( true ) && Version6::is_current();
+		return self::core_schema_is_current() && self::cro_schema_is_current( true ) && Version6::is_current() && Version8::is_current();
 	}
 
 	public static function core_schema_is_current() {
@@ -323,7 +337,7 @@ final class Database {
 	}
 
 	public static function cro_schema_is_current( $verify = false ) {
-		return $verify ? Version5::is_current() && Version7::is_current() : version_compare( (string) get_option( 'formhawk_db_version', '' ), '7', '>=' );
+		return $verify ? Version5::is_current() && Version7::is_current() && Version8::is_current() : version_compare( (string) get_option( 'formhawk_db_version', '' ), '8', '>=' );
 	}
 
 	private static function schema_is_version_2() {
@@ -371,6 +385,10 @@ final class Database {
 		return version_compare( (string) get_option( 'formhawk_db_version', '' ), '6', '>=' );
 	}
 
+	public static function minimum_form_schema_is_current( $verify = false ) {
+		return $verify ? Version8::is_current() : version_compare( (string) get_option( 'formhawk_db_version', '' ), '8', '>=' );
+	}
+
 	public static function all_tables() {
 		return array(
 			self::forms_table(),
@@ -396,6 +414,9 @@ final class Database {
 			self::field_roi_history_table(),
 			self::outcome_api_keys_table(),
 			self::business_audit_table(),
+			self::minimum_form_runs_table(),
+			self::minimum_form_baselines_table(),
+			self::minimum_form_decisions_table(),
 		);
 	}
 }

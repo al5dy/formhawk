@@ -5,6 +5,7 @@ namespace Formhawk\Infrastructure;
 use Formhawk\CRO\AutopilotManager;
 use Formhawk\CRO\Attribution\ContextCleanup;
 use Formhawk\ROI\FieldROIScheduler;
+use Formhawk\MinimumForm\MinimumFormManager;
 
 final class Activator {
 	const CRON_HOOK = 'formhawk_daily_cleanup';
@@ -26,6 +27,9 @@ final class Activator {
 		if ( ! wp_next_scheduled( FieldROIScheduler::CRON_HOOK ) ) {
 			wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', FieldROIScheduler::CRON_HOOK );
 		}
+		if ( ! wp_next_scheduled( MinimumFormManager::CRON_HOOK ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'hourly', MinimumFormManager::CRON_HOOK );
+		}
 	}
 
 	public static function deactivate() {
@@ -35,5 +39,6 @@ final class Activator {
 		wp_clear_scheduled_hook( Cleanup::CONTINUE_HOOK );
 		wp_clear_scheduled_hook( AutopilotManager::CRON_HOOK );
 		wp_clear_scheduled_hook( FieldROIScheduler::CRON_HOOK );
+		wp_clear_scheduled_hook( MinimumFormManager::CRON_HOOK );
 	}
 }

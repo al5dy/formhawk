@@ -55,3 +55,12 @@ await build({
 	outfile: 'assets/css/field-roi.css',
 	legalComments: 'none',
 });
+
+await build({
+	entryPoints: ['resources/scss/minimum-form.scss'],
+	bundle: true,
+	minify: true,
+	loader: {'.scss': 'css'},
+	outfile: 'assets/css/minimum-form.css',
+	legalComments: 'none',
+});

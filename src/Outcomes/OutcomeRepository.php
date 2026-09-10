@@ -32,6 +32,7 @@ final class OutcomeRepository {
 			'form_version_id'            => $form_version_id ? $form_version_id : null,
 			'experiment_id'              => empty( $submission['experiment_id'] ) ? null : absint( $submission['experiment_id'] ),
 			'variant_id'                 => empty( $submission['variant_id'] ) ? null : absint( $submission['variant_id'] ),
+			'minimum_form_baseline_id'   => empty( $submission['minimum_form_baseline_id'] ) ? null : absint( $submission['minimum_form_baseline_id'] ),
 			'device_class'               => in_array( $submission['device_class'], array( 'desktop', 'mobile', 'tablet' ), true ) ? $submission['device_class'] : 'unknown',
 			'status'                     => OutcomeStatus::SUBMITTED,
 			'submitted_at_utc'           => $now,
@@ -39,7 +40,7 @@ final class OutcomeRepository {
 			'mature_after_utc'           => $submitted_time->modify( '+' . $maturity_days . ' days' )->format( 'Y-m-d H:i:s' ),
 			'attribution_expires_at_utc' => $submitted_time->modify( '+' . $window . ' days' )->format( 'Y-m-d H:i:s' ),
 		);
-		$formats        = array( '%s', '%d', '%d', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' );
+		$formats        = array( '%s', '%d', '%d', '%s', '%s', '%s', '%d', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Attribution, its structural fields and initial state publish atomically.
 		$wpdb->query( 'START TRANSACTION' );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Unique public_id makes provider retries idempotent.

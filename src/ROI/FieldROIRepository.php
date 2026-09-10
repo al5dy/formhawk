@@ -46,7 +46,7 @@ final class FieldROIRepository {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- Bounded indexed experiment lookup.
 		$experiments = $wpdb->get_results( $sql, ARRAY_A );
 		foreach ( $experiments as $experiment ) {
-			if ( ! in_array( $experiment['type'], array( ExperimentType::FIELD_ORDER, ExperimentType::PROGRESSIVE_DISCLOSURE ), true ) ) {
+			if ( ! in_array( $experiment['type'], array( ExperimentType::FIELD_ORDER, ExperimentType::PROGRESSIVE_DISCLOSURE, ExperimentType::REMOVE_FIELD, ExperimentType::MAKE_OPTIONAL, ExperimentType::MAKE_REQUIRED ), true ) ) {
 				continue;
 			}
 			$variants = $this->variants( $experiment['id'] );
@@ -88,6 +88,7 @@ final class FieldROIRepository {
 					'revenue_values'  => array(),
 					'maturing'        => 0,
 				); }
+			$base[ $id ]['submissions']     = isset( $outcomes[ $id ] ) ? $outcomes[ $id ]['submissions'] : 0;
 			$base[ $id ]['qualified']       = isset( $outcomes[ $id ] ) ? $outcomes[ $id ]['qualified'] : 0;
 			$base[ $id ]['won']             = isset( $outcomes[ $id ] ) ? $outcomes[ $id ]['won'] : 0;
 			$base[ $id ]['known']           = isset( $outcomes[ $id ] ) ? $outcomes[ $id ]['known'] : 0;
@@ -105,6 +106,30 @@ final class FieldROIRepository {
 			'control_id'             => $control_id,
 			'variant_id'             => $variant_id,
 			'expected_variant_share' => max( 0, min( 1, absint( $variants[1]['traffic_weight'] ) / 100 ) ),
+		);
+	}
+
+	/**
+	 * Builds a mature pre-promotion control versus deployed-baseline cohort.
+	 * Provider submissions remain distinct from the one-conversion-per-assignment
+	 * CRO counter, so repeat legitimate submissions cannot corrupt binary math.
+	 */
+	public function promotion_cohorts( array $experiment, $control_id, $winner_id, $current_start, $end, $currency, $maturity_days ) {
+		$cutoff_timestamp = time() - ( max( 1, absint( $maturity_days ) ) + 1 ) * DAY_IN_SECONDS;
+		$mature_end       = min( $end, wp_date( 'Y-m-d', $cutoff_timestamp, wp_timezone() ) );
+		$control_start    = ! empty( $experiment['started_at_utc'] ) ? get_date_from_gmt( $experiment['started_at_utc'], 'Y-m-d' ) : $current_start;
+		$control_end      = ! empty( $experiment['ended_at_utc'] ) ? get_date_from_gmt( $experiment['ended_at_utc'], 'Y-m-d' ) : $current_start;
+		if ( $mature_end < $current_start || $control_end < $control_start ) {
+			return null;
+		}
+		$control         = $this->single_variant_cohort( $experiment['id'], $control_id, $control_start, $control_end, $currency );
+		$current         = $this->single_variant_cohort( $experiment['id'], $winner_id, $current_start, $mature_end, $currency );
+		$control['seed'] = absint( $experiment['id'] ) * 1009 + absint( $control_id );
+		$current['seed'] = absint( $experiment['id'] ) * 1009 + absint( $winner_id ) + 1;
+		return array(
+			'control'        => $control,
+			'variant'        => $current,
+			'mature_through' => $mature_end,
 		);
 	}
 
@@ -386,10 +411,17 @@ final class FieldROIRepository {
 		if ( ! is_array( $candidate ) || ! isset( $candidate['type'], $candidate['config'] ) || $candidate['type'] !== $experiment_type || ! $this->config_targets_field( $candidate['config'], $field_key ) ) {
 			return null;
 		}
+		$alternatives = array(
+			ExperimentType::FIELD_ORDER            => 'move_later',
+			ExperimentType::PROGRESSIVE_DISCLOSURE => 'progressive_disclosure',
+			ExperimentType::REMOVE_FIELD           => 'remove_field',
+			ExperimentType::MAKE_OPTIONAL          => 'make_optional',
+			ExperimentType::MAKE_REQUIRED          => 'make_required',
+		);
 		return array(
 			'type'         => $experiment_type,
-			'effect_scope' => 'current_field_presentation',
-			'alternative'  => ExperimentType::FIELD_ORDER === $experiment_type ? 'move_later' : 'progressive_disclosure',
+			'effect_scope' => in_array( $experiment_type, array( ExperimentType::REMOVE_FIELD, ExperimentType::MAKE_OPTIONAL, ExperimentType::MAKE_REQUIRED ), true ) ? 'field_semantics' : 'current_field_presentation',
+			'alternative'  => isset( $alternatives[ $experiment_type ] ) ? $alternatives[ $experiment_type ] : 'unknown',
 		);
 	}
 
@@ -449,14 +481,16 @@ final class FieldROIRepository {
 		foreach ( $rows as $row ) {
 			$id = absint( $row['variant_id'] );
 			if ( ! isset( $output[ $id ] ) ) {
-					$output[ $id ] = array(
-						'qualified'       => 0,
-						'won'             => 0,
-						'known'           => 0,
-						'revenue_samples' => 0,
-						'revenue_values'  => array(),
-					); }
-			$excluded                    = in_array( $row['status'], array( OutcomeStatus::SPAM, OutcomeStatus::DUPLICATE ), true );
+						$output[ $id ] = array(
+							'submissions'     => 0,
+							'qualified'       => 0,
+							'won'             => 0,
+							'known'           => 0,
+							'revenue_samples' => 0,
+							'revenue_values'  => array(),
+						); }
+			$excluded = in_array( $row['status'], array( OutcomeStatus::SPAM, OutcomeStatus::DUPLICATE ), true );
+			++$output[ $id ]['submissions'];
 			$output[ $id ]['qualified'] += $excluded ? 0 : absint( $row['qualified'] );
 			$output[ $id ]['won']       += $excluded ? 0 : absint( $row['won'] );
 			$output[ $id ]['known']     += absint( $row['known'] );
@@ -465,6 +499,27 @@ final class FieldROIRepository {
 				$output[ $id ]['revenue_values'][] = (int) $row['revenue_minor']; }
 		}
 		return $output;
+	}
+
+	private function single_variant_cohort( $experiment_id, $variant_id, $start, $end, $currency ) {
+		$traffic            = $this->experiment_traffic( $experiment_id, $variant_id, $variant_id, $start, $end, true );
+		$outcomes           = $this->experiment_outcomes( $experiment_id, $variant_id, $variant_id, $start, $end, $currency );
+		$cohort             = isset( $traffic[ $variant_id ] ) ? $traffic[ $variant_id ] : array(
+			'visitors'    => 0,
+			'submissions' => 0,
+		);
+		$outcome            = isset( $outcomes[ $variant_id ] ) ? $outcomes[ $variant_id ] : array(
+			'submissions'     => 0,
+			'qualified'       => 0,
+			'won'             => 0,
+			'known'           => 0,
+			'revenue_samples' => 0,
+			'revenue_values'  => array(),
+		);
+		$cohort             = array_merge( $cohort, $outcome );
+		$cohort['coverage'] = $cohort['submissions'] ? min( 1, $cohort['known'] / $cohort['submissions'] ) : 0;
+		$cohort['maturing'] = 0;
+		return $cohort;
 	}
 
 	private function maturing_counts( $experiment_id, $control_id, $variant_id, $start, $end ) {

@@ -176,3 +176,29 @@ It upgrades 50,000 actual pre-v7 CRO aggregate rows, verifies frozen history and
 zero historical assignments, repeats the migration, fills the context registry
 to its 50,000-row cap, verifies failed admission, expires the rows and checks
 bounded cleanup/recovery. Only randomly prefixed synthetic tables are removed.
+
+## Version 7 to 8 (Formhawk 0.6.0)
+
+Version 8 is an additive, opt-in Minimum Viable Form migration. It creates
+`formhawk_minimum_form_runs`, `formhawk_minimum_form_baselines` and
+`formhawk_minimum_form_decisions`. Existing CRO experiments receive nullable run,
+baseline and field ancestry columns; outcome submissions receive a nullable baseline
+ID; expiring CRO contexts receive a zero-defaulted one-shot provider-success bit.
+The migration also repairs an absent zero-defaulted `abandonments` CRO aggregate
+column before Minimum Form can read guardrail totals. Historical abandonment
+assignments are not reconstructed because that would fabricate evidence.
+
+No historical assignment, conversion, submission, outcome, Field ROI result,
+decision or baseline is fabricated or reinterpreted. Existing rows retain NULL
+ancestry and existing Autopilot settings remain unchanged. No Minimum Form run is
+created during upgrade.
+
+DDL is serialized by a fixed per-site database lock. Tables, columns and query-serving
+indexes are checked independently so a partial migration can resume without duplicate
+index errors. The DB version advances to 8 only after every required table, column and
+index exists. Runtime Minimum Form registration requires the verified v8 schema;
+failure leaves the original provider form and core analytics available.
+
+Deactivation preserves all data. Explicit uninstall cleanup removes the three new
+tables and both Minimum Form/background hooks together with the existing configured
+Formhawk cleanup scope.

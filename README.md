@@ -18,11 +18,12 @@ Formhawk stores aggregate analytics in your WordPress database to help identify 
 - Local health reporting, placement analytics and configurable retention.
 - Autopilot CRO: safe runtime experiments, confirmed-conversion decisions, automatic guardrails, promotion and rollback without editing provider forms.
 - Field ROI Business Value Intelligence: privacy-safe outcome attribution, EVPV, qualified/won leads per visitor, robust revenue inference, evidence-aware recommendations and Field Value Map.
+- Minimum Viable Form: opt-in sequential semantic experiments that remove only provider-verified safe fields, preserve value-producing qualifiers, build immutable baselines and stop when no evidence-backed simplification remains.
 - WordPress mail operation diagnostics. An accepted mail operation does not prove inbox delivery.
 
 Generic HTML submissions are observed browser attempts; provider-confirmed successes are separate evidence. See the [provider support matrix](docs/PROVIDER-SUPPORT.md) for capabilities, tested versions and remaining validation work.
 
-Version 0.5.2 protects CRO against replayed browser telemetry with signed v2 contexts, short-lived server-side issuance state, atomic lifecycle admission and separate server-issued assignment counts. Client errors, validation and latency are advisory, not autonomous rejection/rollback authority. Generic HTML remains available in Observe/Approve mode with manual decisions; browser submit reports cannot promote a winner automatically. Schema v7 preserves historical data and keeps older experiments manual-safe. Back up before upgrading, clear caches and reload open pages: old v1 CRO tokens are intentionally no longer accepted.
+Version 0.6.0 adds the opt-in Minimum Viable Form engine on schema v8. It reuses Field ROI, business outcomes and the existing CRO runtime to test one semantic field change at a time. Winning states become immutable versioned baselines; provider schema drift, experiment-integrity failures and post-promotion regression fail open to the original or previous validated baseline. Existing Autopilot settings and experiments remain unchanged after upgrade.
 
 The 0.5.1 repeated-AJAX fix remains: independent CF7, WPForms and Elementor submissions get separate Field ROI IDs, while retries retain their ID. CRO attempts/latencies may repeat up to 50 times per issued page/form context without repeating views/starts or changing the experiment arm. Previously merged submissions cannot be reconstructed from Formhawk aggregates.
 
@@ -76,7 +77,7 @@ npm run build
 npm run build:release
 ```
 
-The installable archive is `dist/formhawk-0.5.2.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
+The installable archive is `dist/formhawk-0.6.0.zip`. Inspect the archive and run WordPress Plugin Check before a directory release. GitHub source archives are development snapshots; use the packaging command for an installable release artifact.
 
 ## Project documentation
 
@@ -87,6 +88,7 @@ The installable archive is `dist/formhawk-0.5.2.zip`. Inspect the archive and ru
 - [Ingestion limits, evidence semantics and hardening](docs/HARDENING.md)
 - [Autopilot CRO architecture, statistics and safety](docs/AUTOPILOT-CRO.md)
 - [Field ROI architecture, Outcome API, formulas and privacy](docs/FIELD-ROI.md)
+- [Minimum Viable Form architecture, safety, lifecycle and extension API](docs/MINIMUM-FORM.md)
 - [Free roadmap](docs/ROADMAP-FREE.md)
 - [Pro roadmap](docs/ROADMAP-PRO.md)
 - [Changelog](readme.txt#changelog)

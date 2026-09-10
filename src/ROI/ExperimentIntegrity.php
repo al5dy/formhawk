@@ -4,6 +4,30 @@ namespace Formhawk\ROI;
 
 /** Rejects experiment evidence when assignment balance indicates leakage. */
 final class ExperimentIntegrity {
+	public function validate_aggregates( array $control, array $variant ) {
+		foreach ( array( $control, $variant ) as $arm ) {
+			$assignments = (int) ( $arm['assignments'] ?? $arm['visitors'] ?? 0 );
+			$conversions = (int) ( $arm['confirmed_successes'] ?? $arm['conversions'] ?? 0 );
+			$submissions = (int) ( $arm['submissions'] ?? $conversions );
+			if ( $assignments < 0 || $conversions < 0 || $conversions > $assignments ) {
+				return array(
+					'valid'  => false,
+					'reason' => 'conversions_exceed_assignments',
+				);
+			}
+			if ( $submissions < 0 || ( isset( $arm['known'] ) && ( (int) $arm['known'] < 0 || (int) $arm['known'] > $submissions ) ) ) {
+				return array(
+					'valid'  => false,
+					'reason' => 'outcomes_exceed_submissions',
+				);
+			}
+		}
+		return array(
+			'valid'  => true,
+			'reason' => '',
+		);
+	}
+
 	public function has_assignment_leakage( array $cohorts ) {
 		$expected = isset( $cohorts['expected_variant_share'] ) ? $cohorts['expected_variant_share'] : 0.5;
 		$cells    = array(

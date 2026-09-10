@@ -3,7 +3,7 @@
  * Plugin Name:       Formhawk
  * Plugin URI:        https://wordpress.org/plugins/formhawk/
  * Description:       Privacy-first form analytics, Field ROI and business-value CRO without cookies or submitted field values.
- * Version:           0.5.2
+ * Version:           0.6.0
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Author:            al5dy
@@ -16,8 +16,8 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'FORMHAWK_VERSION', '0.5.2' );
-define( 'FORMHAWK_DB_VERSION', '7' );
+define( 'FORMHAWK_VERSION', '0.6.0' );
+define( 'FORMHAWK_DB_VERSION', '8' );
 define( 'FORMHAWK_FILE', __FILE__ );
 define( 'FORMHAWK_DIR', plugin_dir_path( __FILE__ ) );
 define( 'FORMHAWK_URL', plugin_dir_url( __FILE__ ) );

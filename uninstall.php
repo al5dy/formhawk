@@ -11,6 +11,7 @@ wp_clear_scheduled_hook( 'formhawk_cro_hourly_evaluation' );
 wp_clear_scheduled_hook( 'formhawk_cro_context_cleanup' );
 wp_clear_scheduled_hook( 'formhawk_cro_context_cleanup_continue' );
 wp_clear_scheduled_hook( 'formhawk_field_roi_evaluate' );
+wp_clear_scheduled_hook( 'formhawk_minimum_form_hourly_evaluation' );
 
 $formhawk_settings = get_option( 'formhawk_settings', array() );
 if ( empty( $formhawk_settings['delete_on_uninstall'] ) ) {
@@ -43,6 +44,9 @@ $formhawk_tables = array(
 	$wpdb->prefix . 'formhawk_field_roi_history',
 	$wpdb->prefix . 'formhawk_outcome_api_keys',
 	$wpdb->prefix . 'formhawk_business_audit',
+	$wpdb->prefix . 'formhawk_minimum_form_runs',
+	$wpdb->prefix . 'formhawk_minimum_form_baselines',
+	$wpdb->prefix . 'formhawk_minimum_form_decisions',
 );
 
 foreach ( $formhawk_tables as $formhawk_table ) {

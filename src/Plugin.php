@@ -28,6 +28,10 @@ use Formhawk\Integrations\GenericForm;
 use Formhawk\Integrations\IntegrationRegistry;
 use Formhawk\Integrations\MailMonitor;
 use Formhawk\Integrations\WPForms;
+use Formhawk\MinimumForm\MinimumFormManager;
+use Formhawk\MinimumForm\MinimumFormAdmin;
+use Formhawk\MinimumForm\MinimumFormRepository;
+use Formhawk\MinimumForm\ProviderCapabilityMatrix;
 
 final class Plugin {
 	private static $instance;
@@ -82,6 +86,13 @@ final class Plugin {
 			( new CROConfigController( $cro ) )->register();
 			( new CROEventsController( $cro ) )->register();
 			( new AutopilotManager( $cro, $forms ) )->register();
+			if ( Database::minimum_form_schema_is_current() ) {
+				$minimum_repository   = new MinimumFormRepository();
+				$minimum_capabilities = new ProviderCapabilityMatrix( $registry );
+				$minimum_manager      = new MinimumFormManager( $minimum_repository, $cro, $forms, null, $minimum_capabilities );
+				$minimum_manager->register();
+				( new MinimumFormAdmin( $minimum_repository, $minimum_manager, $forms, $cro, $minimum_capabilities ) )->register();
+			}
 		}
 		$registry->register();
 		( new MailMonitor() )->register();
@@ -147,6 +158,9 @@ final class Plugin {
 			return;
 		}
 
+		// The dependency-free tracker must discover generic, popup and AJAX forms
+		// that do not exist in post content; page-level enqueue detection would
+		// silently miss those supported lifecycles. It remains deferred and small.
 		wp_enqueue_script(
 			'formhawk-tracker',
 			FORMHAWK_URL . 'assets/js/tracker.js',

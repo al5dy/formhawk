@@ -19,6 +19,13 @@ final class ProviderCatalog {
 	const CAP_DYNAMIC_RENDERING      = 'dynamic_rendering';
 	const CAP_SUBMISSION_ATTRIBUTION = 'submission_attribution';
 	const CAP_FIELD_ROI              = 'field_roi';
+	const CAP_REMOVE_FIELD           = 'minimum_form_remove_field';
+	const CAP_MAKE_OPTIONAL          = 'minimum_form_make_optional';
+	const CAP_MAKE_REQUIRED          = 'minimum_form_make_required';
+	const CAP_FIELD_ORDER            = 'minimum_form_field_order';
+	const CAP_PROGRESSIVE_DISCLOSURE = 'minimum_form_progressive_disclosure';
+	const CAP_DEPENDENCY_GRAPH       = 'minimum_form_dependency_graph';
+	const CAP_OUTCOME_ATTRIBUTION    = 'minimum_form_outcome_attribution';
 
 	public static function ids() {
 		return array( self::GENERIC, self::CF7, self::WPFORMS, self::ELEMENTOR );

@@ -19,6 +19,7 @@ use Formhawk\Infrastructure\Activator;
 use Formhawk\Infrastructure\Database;
 use Formhawk\Infrastructure\ModuleGate;
 use Formhawk\Integrations\IntegrationRegistry;
+use Formhawk\MinimumForm\MinimumFormManager;
 use Formhawk\Outcomes\Currency;
 use Formhawk\ROI\FieldROIRepository;
 
@@ -28,7 +29,7 @@ final class Admin {
 	private $integrations;
 	private $experiments;
 
-	public function __construct( FormRepository $forms, IntegrationRegistry $integrations = null, ExperimentRepository $experiments = null ) {
+	public function __construct( FormRepository $forms, ?IntegrationRegistry $integrations = null, ?ExperimentRepository $experiments = null ) {
 		$this->forms        = $forms;
 		$this->analytics    = new AnalyticsRepository();
 		$this->integrations = $integrations;
@@ -291,7 +292,7 @@ final class Admin {
 		return $input;
 	}
 
-	private function record_manual_decision( $form_id, array $experiment, $decision, array $resulting_baseline = null ) {
+	private function record_manual_decision( $form_id, array $experiment, $decision, ?array $resulting_baseline = null ) {
 		$settings = $this->experiments->settings( $form_id );
 		if ( ! $settings ) {
 			return;
@@ -583,9 +584,10 @@ final class Admin {
 		$raw_conversion     = $views ? 100 * absint( $summary['submissions'] ) / $views : null;
 		$qualified_per_view = $views ? 100 * absint( $summary['qualified'] ) / $views : null;
 		$link               = admin_url( 'admin.php?page=formhawk-field-roi' );
+		$minimum_form_link  = admin_url( 'admin.php?page=formhawk-minimum-form&form_id=' . absint( $form['id'] ) );
 		?>
 		<section class="fh-card fh-business-value">
-			<div class="fh-card-head"><div><span class="fh-business-kicker"><?php esc_html_e( 'BUSINESS VALUE INTELLIGENCE', 'formhawk' ); ?></span><h2><?php esc_html_e( 'Field ROI', 'formhawk' ); ?></h2></div><a class="button" href="<?php echo esc_url( $link ); ?>"><?php esc_html_e( 'Open Field Value Map', 'formhawk' ); ?></a></div>
+			<div class="fh-card-head"><div><span class="fh-business-kicker"><?php esc_html_e( 'BUSINESS VALUE INTELLIGENCE', 'formhawk' ); ?></span><h2><?php esc_html_e( 'Field ROI', 'formhawk' ); ?></h2></div><div class="fh-card-actions"><a class="button" href="<?php echo esc_url( $link ); ?>"><?php esc_html_e( 'Open Field Value Map', 'formhawk' ); ?></a><a class="button button-primary" href="<?php echo esc_url( $minimum_form_link ); ?>"><?php esc_html_e( 'Find Minimum Form', 'formhawk' ); ?></a></div></div>
 			<?php if ( empty( $settings['enabled'] ) ) : ?>
 				<p><?php esc_html_e( 'Connect business outcomes to learn which fields protect value and which only create friction.', 'formhawk' ); ?></p>
 			<?php else : ?>
@@ -611,6 +613,8 @@ final class Admin {
 			array( __( 'Data cleanup', 'formhawk' ), (bool) wp_next_scheduled( Activator::CRON_HOOK ), __( 'Daily retention cleanup is scheduled.', 'formhawk' ) ),
 			array( __( 'Autopilot runtime', 'formhawk' ), is_readable( FORMHAWK_DIR . 'assets/js/cro-autopilot.js' ) && is_readable( FORMHAWK_DIR . 'assets/css/cro.css' ), __( 'Runtime Variant Engine assets are readable.', 'formhawk' ) ),
 			array( __( 'Autopilot evaluator', 'formhawk' ), (bool) wp_next_scheduled( AutopilotManager::CRON_HOOK ), __( 'Race-safe hourly statistical evaluation is scheduled.', 'formhawk' ) ),
+			array( __( 'Minimum Form database', 'formhawk' ), Database::minimum_form_schema_is_current( true ), __( 'Immutable baseline, run and decision storage is ready.', 'formhawk' ) ),
+			array( __( 'Minimum Form evaluator', 'formhawk' ), (bool) wp_next_scheduled( MinimumFormManager::CRON_HOOK ), __( 'Sequential field optimization and promotion monitoring are scheduled.', 'formhawk' ) ),
 		);
 		if ( $this->integrations ) {
 			foreach ( $this->integrations->all() as $provider => $integration ) {

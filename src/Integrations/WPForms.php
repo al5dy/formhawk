@@ -38,6 +38,11 @@ final class WPForms implements FormIntegrationInterface {
 			ProviderCatalog::CAP_DYNAMIC_RENDERING,
 			ProviderCatalog::CAP_SUBMISSION_ATTRIBUTION,
 			ProviderCatalog::CAP_FIELD_ROI,
+			ProviderCatalog::CAP_REMOVE_FIELD,
+			ProviderCatalog::CAP_FIELD_ORDER,
+			ProviderCatalog::CAP_PROGRESSIVE_DISCLOSURE,
+			ProviderCatalog::CAP_DEPENDENCY_GRAPH,
+			ProviderCatalog::CAP_OUTCOME_ATTRIBUTION,
 		);
 	}
 

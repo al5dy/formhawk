@@ -5,7 +5,7 @@ namespace Formhawk\CRO;
 final class GuardrailEvaluator {
 	private $statistics;
 
-	public function __construct( StatisticalEngine $statistics = null ) {
+	public function __construct( ?StatisticalEngine $statistics = null ) {
 		$this->statistics = $statistics ? $statistics : new StatisticalEngine();
 	}
 
@@ -23,6 +23,18 @@ final class GuardrailEvaluator {
 				'evidence'  => DecisionEvidence::SERVER_CONFIRMED,
 				'warnings'  => array(),
 			);
+		}
+		foreach ( array( $control, $variant ) as $arm ) {
+			$assignments = (int) ( $arm['assignments'] ?? 0 );
+			$conversions = (int) ( $arm['confirmed_successes'] ?? $arm['conversions'] ?? 0 );
+			if ( $assignments < 0 || $conversions < 0 || $conversions > $assignments ) {
+				return array(
+					'triggered' => true,
+					'reason'    => 'conversions_exceed_assignments',
+					'evidence'  => DecisionEvidence::SERVER_CONFIRMED,
+					'warnings'  => array(),
+				);
+			}
 		}
 		$warnings    = $this->advisory_warnings( $control, $variant, $policy );
 		$v_exposures = absint( $variant['assignments'] ?? 0 );

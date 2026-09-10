@@ -9,4 +9,6 @@ interface CROContextStoreInterface {
 	public function is_issued( array $context );
 	/** Atomically admit an event and increment its aggregate; returns a fixed result code. */
 	public function consume( array $context, $type, $attempt = 0, $latency = null, $successful = false );
+	/** Atomically admit at most one provider-confirmed binary conversion. */
+	public function consume_provider_success( array $context );
 }

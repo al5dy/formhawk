@@ -9,6 +9,9 @@ use Formhawk\CRO\Mutations\PlaceholderMutation;
 use Formhawk\CRO\Mutations\ProgressiveDisclosureMutation;
 use Formhawk\CRO\Mutations\SubmitButtonMutation;
 use Formhawk\CRO\Mutations\MutationInterface;
+use Formhawk\CRO\Mutations\RemoveFieldMutation;
+use Formhawk\CRO\Mutations\MakeOptionalMutation;
+use Formhawk\CRO\Mutations\MakeRequiredMutation;
 
 final class MutationRegistry {
 	private $mutations = array();
@@ -22,6 +25,9 @@ final class MutationRegistry {
 				new SubmitButtonMutation(),
 				new LabelMutation(),
 				new PlaceholderMutation(),
+				new RemoveFieldMutation(),
+				new MakeOptionalMutation(),
+				new MakeRequiredMutation(),
 			);
 		}
 		foreach ( $mutations as $mutation ) {

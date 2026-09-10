@@ -10,7 +10,7 @@ final class RequestContext {
 	private $context;
 	private $contexts;
 
-	public function __construct( ContextSigner $signer = null, CROContextStoreInterface $contexts = null ) {
+	public function __construct( ?ContextSigner $signer = null, ?CROContextStoreInterface $contexts = null ) {
 		$this->signer   = $signer ? $signer : new ContextSigner();
 		$this->contexts = $contexts ? $contexts : new ContextStore();
 	}
@@ -40,6 +40,11 @@ final class RequestContext {
 			return null;
 		}
 		return $this->context;
+	}
+
+	public function consume_provider_success( $provider, $provider_form_id ) {
+		$context = $this->get( $provider, $provider_form_id );
+		return $context ? $this->contexts->consume_provider_success( $context ) : 'unknown_context';
 	}
 
 	/** Test seam for provider lifecycle tests; production input still requires HMAC. */

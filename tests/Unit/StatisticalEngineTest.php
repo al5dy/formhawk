@@ -7,6 +7,23 @@ use Formhawk\CRO\StatisticalEngine;
 use PHPUnit\Framework\TestCase;
 
 final class StatisticalEngineTest extends TestCase {
+	public function test_impossible_conversion_totals_are_not_silently_clamped() {
+		$result = ( new StatisticalEngine() )->evaluate(
+			array(
+				'views'       => 10,
+				'conversions' => 11,
+			),
+			array(
+				'views'       => 10,
+				'conversions' => 2,
+			),
+			$this->policy(),
+			10
+		);
+		$this->assertSame( 'integrity_failure', $result['decision'] );
+		$this->assertFalse( $result['data_integrity_valid'] );
+		$this->assertNull( $result['control_rate'] );
+	}
 	private function policy() {
 		return ( new OptimizationPolicy() )->for_form( array( 'aggressiveness' => 'balanced' ) );
 	}

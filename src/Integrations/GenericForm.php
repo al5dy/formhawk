@@ -22,6 +22,9 @@ final class GenericForm implements FormIntegrationInterface {
 		return array(
 			ProviderCatalog::CAP_FRONTEND_TRACKING,
 			ProviderCatalog::CAP_DYNAMIC_RENDERING,
+			ProviderCatalog::CAP_REMOVE_FIELD,
+			ProviderCatalog::CAP_FIELD_ORDER,
+			ProviderCatalog::CAP_PROGRESSIVE_DISCLOSURE,
 		);
 	}
 
